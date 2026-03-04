@@ -1,0 +1,19 @@
+[project]
+name = "stock-analysis"
+version = "0.1.0"
+description = "Stock Financial Analysis Application with Streamlit and PostgreSQL"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.2.6",
+    "pandas>=2.2.3",
+    "plotly>=6.1.2",
+    "psycopg2-binary>=2.9.10",
+    "python-dotenv>=1.0.0",
+    "sqlalchemy>=2.0.41",
+    "streamlit>=1.45.1",
+    "yfinance>=0.2.61",
+]
+# AI uses Ollama (local, no extra dependencies)
+
+[tool.setuptools]
+py-modules = ["app", "database", "formatting_utils"]
