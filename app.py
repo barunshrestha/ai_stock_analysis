@@ -89,6 +89,29 @@ def call_ollama_with_error(
         return None, f"Ollama request failed: {str(e)}"
 
 
+@st.cache_data(ttl=60)
+def fetch_ollama_models() -> list[str]:
+    """Fetch list of available Ollama model names from the API. Cached for 60s."""
+    import urllib.request
+    import urllib.error
+    import json
+    url = f"{OLLAMA_BASE_URL.rstrip('/')}/api/tags"
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+            models = data.get("models") or []
+            names = [m.get("name") for m in models if m.get("name")]
+            return names if names else [OLLAMA_MODEL]
+    except Exception:
+        return [OLLAMA_MODEL]
+
+
+def get_current_ollama_model() -> str:
+    """Return the user-selected LLM model from session state, or env default."""
+    return st.session_state.get("selected_llm_model") or OLLAMA_MODEL
+
+
 def create_grok_trend_chart(hist_data, symbol):
     """Create trend chart with support/resistance and beginner bad-entry zone."""
     if hist_data is None or hist_data.empty:
@@ -267,7 +290,7 @@ Formatting requirements:
         user_prompt,
         temperature=0.35,
         max_tokens=2400,
-        model=OLLAMA_ANALYSIS_MODEL
+        model=get_current_ollama_model()
     )
     if not content:
         if ollama_error:
@@ -355,6 +378,10 @@ else:  # Automation
 st.title(page_heading[0])
 st.markdown(page_heading[1])
 
+# Initialize session state for selected LLM model (app-wide default until changed)
+if "selected_llm_model" not in st.session_state:
+    st.session_state.selected_llm_model = OLLAMA_MODEL
+
 # Initialize session state for DCA stocks
 if 'dca_stocks' not in st.session_state:
     st.session_state.dca_stocks = []
@@ -402,6 +429,26 @@ ollama_button = False
 ollama_symbol = None
 
 with st.sidebar:
+    # LLM model selector (applies to all AI features app-wide)
+    st.subheader("🤖 LLM Model")
+    try:
+        available_models = fetch_ollama_models()
+    except Exception:
+        available_models = [OLLAMA_MODEL]
+    current_model = get_current_ollama_model()
+    if current_model not in available_models:
+        available_models = [current_model] + [m for m in available_models if m != current_model]
+    selected = st.selectbox(
+        "Model",
+        options=available_models,
+        index=available_models.index(current_model) if current_model in available_models else 0,
+        key="llm_model_select",
+        help="Selected model is used for all AI analysis across the app until you change it.",
+    )
+    st.session_state.selected_llm_model = selected
+    st.caption(f"Using: **{get_current_ollama_model()}**")
+    st.markdown("---")
+
     if page == "Stock Analysis":
         st.header("Stock Analysis Settings")
     elif page == "Ollama Analysis":
@@ -414,7 +461,7 @@ with st.sidebar:
         st.header("Industry Browse")
     else:  # DCA
         st.header("DCA Settings")
-    
+
     if page == "Stock Analysis":
         # Stock symbol input - use URL parameter if available
         default_symbol = symbol_from_url if symbol_from_url else "AAPL"
@@ -436,22 +483,6 @@ with st.sidebar:
                     picked = st.selectbox("Pick symbol from industry", [""] + sym_opts, key="sa_industry_symbol")
                     if picked:
                         stock_symbol = picked
-        
-        # Time period selection
-        period_options = {
-            "1 Month": "1mo",
-            "3 Months": "3mo", 
-            "6 Months": "6mo",
-            "1 Year": "1y",
-            "2 Years": "2y",
-            "5 Years": "5y"
-        }
-        
-        selected_period = st.selectbox(
-            "Select Time Period",
-            options=list(period_options.keys()),
-            index=3  # Default to 1 Year
-        )
         
         # Analysis options
         show_fundamental_analysis = st.checkbox(
@@ -487,7 +518,6 @@ with st.sidebar:
         if analyze_button and stock_symbol:
             st.session_state.stock_analysis_context = {
                 "symbol": stock_symbol,
-                "selected_period": selected_period,
                 "show_fundamental_analysis": show_fundamental_analysis,
                 "show_comprehensive_table": show_comprehensive_table,
                 "use_database": use_database
@@ -510,12 +540,6 @@ with st.sidebar:
                     if picked:
                         ollama_symbol = picked
 
-        ollama_period = st.selectbox(
-            "Select Time Period",
-            options=["6 Months", "1 Year", "2 Years", "5 Years"],
-            index=1
-        )
-
         ollama_use_database = st.checkbox(
             "Use cached data from database",
             value=True,
@@ -526,7 +550,7 @@ with st.sidebar:
         if ollama_button and ollama_symbol:
             st.session_state.ollama_analysis_context = {
                 "symbol": ollama_symbol,
-                "period": ollama_period,
+                "period": "1 Year",
                 "use_database": ollama_use_database
             }
     elif page == "DCA":
@@ -923,13 +947,14 @@ def calculate_financial_metrics(hist_data, info):
         st.error(f"Error calculating metrics: {str(e)}")
         return {}
 
-def generate_ai_stock_summary(stock_symbol, company_name, info, metrics, hist_data, earnings_data, financials):
+def generate_ai_stock_summary(stock_symbol, company_name, info, metrics, hist_data, earnings_data, financials, model: str | None = None):
     """
     Generate AI-powered stock analysis summary including:
     1. Company health summary
     2. Key opportunities
     3. Major risks
     4. Buy/Sell/Hold logic explanation
+    Uses the provided model (or env default) for Ollama; pass model when calling from background thread.
     """
     try:
         # Prepare data summary for AI
@@ -1003,7 +1028,7 @@ Provide your analysis in the following format:
 [Provide a clear Buy, Sell, or Hold recommendation with detailed reasoning. Explain the investment thesis, valuation considerations, risk-reward profile, and time horizon. Be specific about what would change your recommendation.]
 
 Format your response using clear markdown sections. Be professional, analytical, and data-driven. Use specific numbers and metrics from the data provided."""
-        content = call_ollama(system_prompt, user_prompt, temperature=0.7, max_tokens=2000)
+        content = call_ollama(system_prompt, user_prompt, temperature=0.7, max_tokens=2000, model=model)
         if content:
             return content
         
@@ -1157,7 +1182,7 @@ def generate_template_summary(stock_symbol, company_name, info, metrics, hist_da
 - **To SELL**: Deteriorating fundamentals, increasing debt, or valuation becoming excessive
 - **To HOLD**: Maintain current position while monitoring key metrics for changes
 
-**Note**: This is a template-based analysis. For AI-powered insights, ensure Ollama is running at OLLAMA_BASE_URL with model OLLAMA_MODEL (e.g. gemma3:4b).
+**Note**: This is a template-based analysis. For AI-powered insights, ensure Ollama is running and select your preferred model in the sidebar (currently using the selected LLM model).
 """
     
     return summary
@@ -3472,102 +3497,63 @@ def display_comprehensive_table(symbol, info, hist_data, financials):
 
 # Main application logic
 if page == "My Portfolio":
-    # Display current portfolio with delete buttons at the top
-    st.subheader("📋 Current Portfolio")
-    
-    if st.session_state.portfolio:
-        # Build symbol -> industry for portfolio (from DB) for industry filter
-        portfolio_industry_map = {}
-        if db and hasattr(db, "get_stock_info"):
-            for sym in st.session_state.portfolio:
-                info = db.get_stock_info(sym)
-                if info and info.get("industry"):
-                    portfolio_industry_map[sym] = info["industry"]
-        portfolio_industries = sorted(set(portfolio_industry_map.values()))
-        filter_by_industry = st.selectbox(
-            "Filter by industry",
-            options=["All"] + portfolio_industries,
-            key="portfolio_industry_filter",
-        )
-        if filter_by_industry != "All":
-            portfolio_display = [s for s in st.session_state.portfolio if portfolio_industry_map.get(s) == filter_by_industry]
+    # Industry selector: My Portfolio (default) or industries from admin stock_industry table
+    admin_industries = []
+    if db and hasattr(db, "admin_get_all_industries"):
+        admin_industries = db.admin_get_all_industries()
+    view_options = ["My Portfolio"] + (admin_industries if admin_industries else [])
+    selected_view = st.selectbox(
+        "View",
+        options=view_options,
+        key="portfolio_view_select",
+        help="Select 'My Portfolio' for your portfolio stocks, or an industry to see all stocks in that industry."
+    )
+
+    if selected_view != "My Portfolio":
+        # Show stocks by industry (from admin stock_industry table)
+        st.subheader(f"📋 {selected_view}")
+        industry_stocks = db.admin_get_stocks_by_industry(selected_view) if db and hasattr(db, "admin_get_stocks_by_industry") else []
+        if not industry_stocks:
+            st.info(f"No stocks assigned to **{selected_view}** yet. Use the 'By Industry' page to add stocks to industries.")
         else:
-            portfolio_display = st.session_state.portfolio
-        if not portfolio_display and filter_by_industry != "All":
-            st.info(f"No portfolio stocks in industry \"{filter_by_industry}\". Add stocks and analyze them to see industry data.")
-        st.write(f"**{len(st.session_state.portfolio)} stocks in your portfolio**" + (f" — showing {len(portfolio_display)} in selected industry" if filter_by_industry != "All" else ""))
-        
-        # Add CSS for hover effect on delete button and clickable stock symbols
-        st.markdown("""
-        <style>
-        .stock-item {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 5px;
-            margin: 2px 0;
-            border-radius: 5px;
-            background-color: rgba(0, 0, 0, 0.05);
-        }
-        .stock-item:hover {
-            background-color: rgba(0, 0, 0, 0.1);
-        }
-        .stock-symbol {
-            font-weight: bold;
-            flex-grow: 1;
-        }
-        .stock-link {
-            color: inherit;
-            text-decoration: none;
-            font-weight: bold;
-            cursor: pointer;
-        }
-        .stock-link:hover {
-            color: #1f77b4;
-            text-decoration: underline;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
-        # Display stocks in columns with delete buttons
-        num_cols = 10
-        
-        for row_start in range(0, len(portfolio_display), num_cols):
-            cols = st.columns(num_cols)
-            row_symbols = portfolio_display[row_start:row_start + num_cols]
-            
-            for col, symbol in zip(cols, row_symbols):
-                with col:
-                    # Create clickable link for stock symbol that opens in new tab
-                    # The link uses query parameters to switch to Stock Analysis page and auto-analyze
-                    st.markdown(
-                        f'<a href="?symbol={symbol}&analyze=true" target="_blank" class="stock-link" title="Click to analyze {symbol} in new tab">{symbol}</a>',
-                        unsafe_allow_html=True
-                    )
-                    if st.button("x", key=f"remove_{symbol}", help=f"Remove {symbol}"):
-                        # Remove from portfolio
-                        st.session_state.portfolio.remove(symbol)
-                        
-                        # Clear cached portfolio data since portfolio changed
-                        if 'cached_portfolio_data' in st.session_state:
-                            del st.session_state.cached_portfolio_data
-                        st.session_state.portfolio_loaded = False
-                        
-                        # Remove from database
-                        if db and hasattr(db, 'remove_from_portfolio'):
-                            try:
-                                db.remove_from_portfolio(symbol)
-                            except:
-                                pass
-                        
-                        st.rerun()
-        
-        st.markdown("---")
+            st.write(f"**{len(industry_stocks)} stocks** in this industry")
+            st.markdown("""
+            <style>
+            .stock-link { color: inherit; font-weight: bold; text-decoration: none; cursor: pointer; }
+            .stock-link:hover { color: #1f77b4; text-decoration: underline; }
+            </style>
+            """, unsafe_allow_html=True)
+            num_cols = 10
+            symbols_only = [item["symbol"] for item in industry_stocks]
+            for row_start in range(0, len(symbols_only), num_cols):
+                cols = st.columns(num_cols)
+                row_symbols = symbols_only[row_start:row_start + num_cols]
+                for col, symbol in zip(cols, row_symbols):
+                    with col:
+                        st.markdown(
+                            f'<a href="?symbol={symbol}&analyze=true" target="_blank" class="stock-link" title="Analyze {symbol}">{symbol}</a>',
+                            unsafe_allow_html=True
+                        )
+
+            if st.button("Load portfolio data for this industry", key=f"industry_load_{selected_view}"):
+                with st.spinner(f"Fetching data for {len(symbols_only)} stocks in {selected_view}..."):
+                    industry_portfolio_data = fetch_portfolio_data(symbols_only, use_database)
+                if industry_portfolio_data:
+                    st.session_state["industry_portfolio_data"] = industry_portfolio_data
+                    st.session_state["industry_portfolio_loaded_for"] = selected_view
+                    st.rerun()
+                else:
+                    st.error("Could not load portfolio data. Please check stock symbols and try again.")
+
+            if st.session_state.get("industry_portfolio_loaded_for") == selected_view and st.session_state.get("industry_portfolio_data"):
+                st.markdown("---")
+                st.subheader(f"Portfolio data: {selected_view}")
+                display_portfolio_grid(st.session_state["industry_portfolio_data"])
     else:
-        st.info("👈 Add stocks to your portfolio using the sidebar")
-    
-    # Portfolio page logic
-    if analyze_button or st.session_state.get('portfolio_loaded', False):
+        pass  # My Portfolio: no portfolio display (use View selector + industry / refresh sections)
+
+    # Portfolio page logic (overview/charts) — only when viewing My Portfolio
+    if selected_view == "My Portfolio" and (analyze_button or st.session_state.get('portfolio_loaded', False)):
         if st.session_state.portfolio:
             # Check if real-time updates are enabled (from previous render)
             # If real-time is enabled and data is cached, skip full refetch to avoid updating financial statements
@@ -3602,7 +3588,7 @@ if page == "My Portfolio":
                 st.error("Could not load portfolio data. Please check your stock symbols.")
         else:
             st.info("👈 Add stocks to your portfolio using the sidebar")
-    else:
+    elif selected_view == "My Portfolio":
         if st.session_state.portfolio:
             st.info("👈 Click 'Refresh Portfolio Data' to load your portfolio analysis")
         else:
@@ -4047,11 +4033,11 @@ elif page == "Automation" and automation_button and automation_ticker:
 
 Provide a concise, actionable analysis (2-3 paragraphs) that helps a trader understand if this setup makes sense from both technical and fundamental perspectives."""
                                                 system_prompt = "You are an expert financial analyst specializing in technical analysis and market sentiment. Provide clear, actionable insights."
-                                                ai_analysis = call_ollama(system_prompt, user_prompt, temperature=0.7, max_tokens=500)
+                                                ai_analysis = call_ollama(system_prompt, user_prompt, temperature=0.7, max_tokens=500, model=get_current_ollama_model())
                                                 if ai_analysis:
                                                     st.markdown(ai_analysis)
                                                 else:
-                                                    st.warning("AI analysis unavailable. Ensure Ollama is running (e.g. at http://localhost:11434) with model gemma3:4b.")
+                                                    st.warning(f"AI analysis unavailable. Ensure Ollama is running (e.g. at {OLLAMA_BASE_URL}) with model {get_current_ollama_model()}.")
                                                     st.markdown(f"""
                                                     **Setup Summary:**
                                                     - Entry at ${setup['entry']:.2f} with stop-loss at ${setup['stop_loss']:.2f}
@@ -4166,7 +4152,6 @@ elif page == "Stock Analysis" and st.session_state.get('stock_analysis_context')
     # Stock Analysis page logic
     analysis_context = st.session_state.stock_analysis_context
     stock_symbol = analysis_context["symbol"]
-    selected_period = analysis_context["selected_period"]
     show_fundamental_analysis = analysis_context["show_fundamental_analysis"]
     show_comprehensive_table = analysis_context["show_comprehensive_table"]
     use_database = analysis_context["use_database"]
@@ -4181,7 +4166,7 @@ elif page == "Stock Analysis" and st.session_state.get('stock_analysis_context')
         with st.spinner(f"Fetching data for {stock_symbol}..."):
             # Always fetch financials if comprehensive table is requested
             fetch_financials = show_fundamental_analysis or show_comprehensive_table
-            hist_data, info, earnings_data, financials, error = get_stock_data(stock_symbol, period_options[selected_period], use_database, fetch_financials)
+            hist_data, info, earnings_data, financials, error = get_stock_data(stock_symbol, "1y", use_database, fetch_financials)
         
         if error:
             st.error(error)
@@ -4191,7 +4176,7 @@ elif page == "Stock Analysis" and st.session_state.get('stock_analysis_context')
             st.header(f"{company_name} ({stock_symbol})")
 
             # Show a clear top banner while Ollama summary is being generated.
-            ai_context_key = f"{stock_symbol}:{selected_period}"
+            ai_context_key = f"{stock_symbol}:1y:{get_current_ollama_model()}"
             ai_future_for_banner = st.session_state.get("ai_summary_future")
             is_ai_loading = (
                 st.session_state.get("ai_summary_context") == ai_context_key and
@@ -4212,7 +4197,7 @@ elif page == "Stock Analysis" and st.session_state.get('stock_analysis_context')
             # AI-Generated Stock Analysis Summary
             st.subheader("🤖 AI Stock Analysis Summary")
             ai_summary_container = st.container()
-            ai_context_key = f"{stock_symbol}:{selected_period}"
+            ai_context_key = f"{stock_symbol}:1y:{get_current_ollama_model()}"
 
             if "ai_summary_future" not in st.session_state:
                 st.session_state.ai_summary_future = None
@@ -4246,7 +4231,8 @@ elif page == "Stock Analysis" and st.session_state.get('stock_analysis_context')
                         metrics,
                         hist_data,
                         earnings_data,
-                        financials
+                        financials,
+                        get_current_ollama_model(),
                     )
                     st.rerun()
             with action_col2:
@@ -4266,7 +4252,7 @@ elif page == "Stock Analysis" and st.session_state.get('stock_analysis_context')
             with ai_summary_container:
                 if st.session_state.ai_summary_result:
                     st.markdown(st.session_state.ai_summary_result)
-                    st.caption(f"🤖 Using AI model: {OLLAMA_MODEL}")
+                    st.caption(f"🤖 Using AI model: {get_current_ollama_model()}")
                 elif st.session_state.ai_summary_future is not None:
                     st.info("AI summary is generating in background. You can continue using the page and click 'Refresh AI Status'.")
                 elif st.session_state.ai_summary_error:
@@ -4403,7 +4389,7 @@ elif page == "Stock Analysis" and st.session_state.get('stock_analysis_context')
             # Create download button
             csv_string = f"# {company_name} ({stock_symbol}) Financial Data\n"
             csv_string += f"# Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            csv_string += f"# Period: {selected_period}\n\n"
+            csv_string += "# Period: 1 Year\n\n"
             csv_string += "# Key Metrics\n"
             csv_string += metadata_df.to_csv(index=False)
             
@@ -4557,7 +4543,7 @@ elif page == "Ollama Analysis" and st.session_state.get('ollama_analysis_context
                 }
 
             st.subheader("🧠 Ollama Analysis (On-demand per point)")
-            st.caption(f"Model: {OLLAMA_ANALYSIS_MODEL}")
+            st.caption(f"Model: {get_current_ollama_model()}")
 
             point_definitions = [
                 (1, "What the company actually does", "Explain the core business, products/services, customers, and business model in simple terms."),
@@ -4577,7 +4563,7 @@ elif page == "Ollama Analysis" and st.session_state.get('ollama_analysis_context
                 (15, "Risk management", "Provide position sizing, max loss, invalidation, and trade management rules.")
             ]
 
-            analysis_context_key = f"{ollama_symbol}:{ollama_period}:{OLLAMA_ANALYSIS_MODEL}"
+            analysis_context_key = f"{ollama_symbol}:{ollama_period}:{get_current_ollama_model()}"
             if "ollama_point_cache" not in st.session_state:
                 st.session_state.ollama_point_cache = {}
             if "ollama_point_error" not in st.session_state:
@@ -4632,7 +4618,8 @@ elif page == "By Industry":
 
         # ----- Add stock to industry -----
         with st.expander("➕ Add stock to industry", expanded=True):
-            add_symbol = st.text_input("Stock symbol", value="", key="industry_add_symbol", placeholder="e.g. AAPL").strip().upper()
+            add_symbol_input = st.text_input("Stock symbol(s)", value="", key="industry_add_symbol", placeholder="e.g. AAPL or AAPL, GOOGL, MSFT (comma-separated)").strip().upper()
+            add_symbols = [s.strip() for s in add_symbol_input.split(",") if s.strip()]
             admin_industries = db.admin_get_all_industries()
             add_industry_new = st.text_input("New industry name (optional)", value="", key="industry_add_new", placeholder="Type to create new industry")
             add_industry_existing = st.multiselect(
@@ -4645,26 +4632,29 @@ elif page == "By Industry":
             if add_industry_new.strip():
                 add_industries.append(add_industry_new.strip())
             add_industries = list(dict.fromkeys(add_industries))  # unique, order preserved
-            if st.button("Add to selected industries", key="industry_add_btn") and add_symbol:
+            if st.button("Add to selected industries", key="industry_add_btn") and add_symbols:
                 if not add_industries:
                     st.error("Select or enter at least one industry.")
                 else:
-                    ok_count = 0
-                    for ind in add_industries:
-                        ok, err = db.admin_add_stock_to_industry(add_symbol, ind)
-                        if ok:
-                            ok_count += 1
-                        else:
-                            st.error(f"Failed to add to '{ind}': {err}")
-                    if ok_count:
-                        st.success(f"Added **{add_symbol}** to {ok_count} industry(ies).")
-                        try:
-                            ticker = yf.Ticker(add_symbol)
-                            info = ticker.info
-                            if info and info.get("symbol"):
-                                db.save_stock_info(add_symbol, info)
-                        except Exception:
-                            pass
+                    total_ok = 0
+                    for add_symbol in add_symbols:
+                        for ind in add_industries:
+                            ok, err = db.admin_add_stock_to_industry(add_symbol, ind)
+                            if ok:
+                                total_ok += 1
+                            else:
+                                st.error(f"Failed to add **{add_symbol}** to '{ind}': {err}")
+                    if total_ok:
+                        syms_str = ", ".join(add_symbols)
+                        st.success(f"Added **{syms_str}** to {total_ok} industry assignment(s).")
+                        for add_symbol in add_symbols:
+                            try:
+                                ticker = yf.Ticker(add_symbol)
+                                info = ticker.info
+                                if info and info.get("symbol"):
+                                    db.save_stock_info(add_symbol, info)
+                            except Exception:
+                                pass
                         st.rerun()
 
         # ----- Filter and list industries -----
