@@ -1,0 +1,59 @@
+# Full-stack deployment: PostgreSQL + FastAPI + Next.js.
+#
+#   docker compose up --build
+#
+# Frontend:  http://localhost:3000
+# Backend:   http://localhost:8000  (interactive docs at /docs)
+#
+# Notes:
+# - To reuse an existing local PostgreSQL instead of the bundled one, remove
+#   the `postgres` service and point DATABASE_URL at your instance.
+# - Ollama runs on the host; the backend reaches it via host.docker.internal.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stock}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stock}
+      POSTGRES_DB: ${POSTGRES_DB:-stock_analysis}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stock}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://stock:stock@postgres:5432/stock_analysis}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma3:4b}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Browser-side URL of the backend (NEXT_PUBLIC_* is baked at build time).
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

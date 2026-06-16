@@ -1,191 +1,121 @@
-# 📊 Stock Analysis App - Local Deployment Guide
+# Stock Analysis App — Deployment Guide
 
-## 🚀 Quick Start
+The app has two parts:
 
-### Option 1: Simple Terminal Launch (Recommended)
+| Part     | Tech                          | Default URL            |
+|----------|-------------------------------|------------------------|
+| Backend  | FastAPI (Python)              | http://localhost:8000  |
+| Frontend | Next.js + Tailwind/shadcn     | http://localhost:3002 (dev) / 3000 (Docker) |
 
-1. Open Terminal
-2. Navigate to the app directory:
-   ```bash
-   cd /Users/barunshrestha/repo/Agents/ai_stock_analysis
-   ```
-3. Run the startup script:
-   ```bash
-   ./start_app.sh
-   ```
-4. Bookmark in your browser: `http://localhost:8501`
+Plus two external services:
+
+- **PostgreSQL** — portfolio, industry assignments, cached stock info (`DATABASE_URL` in `.env`)
+- **Ollama** (optional) — local LLM for AI summaries and 15-point analysis (`ollama serve`)
 
 ---
 
-## 🔖 Creating a Permanent Bookmark
+## Local Development (recommended)
 
-Once the app is running:
-
-1. **Open your browser** and go to: `http://localhost:8501`
-2. **Bookmark the page** (⌘+D on Mac)
-3. **Name it**: "Stock Analysis Dashboard"
-4. The bookmark will work whenever the app is running
-
----
-
-## 🖥️ Creating a Desktop Launcher (macOS)
-
-### Method 1: Create an Application Shortcut
-
-1. Open **Automator** (Applications → Automator)
-2. Choose **Application**
-3. Search for "Run Shell Script" and drag it to the workflow
-4. Paste this script:
-   ```bash
-   cd /Users/barunshrestha/repo/Agents/ai_stock_analysis
-   source venv/bin/activate
-   streamlit run app.py --server.port=8501 --server.address=localhost &
-   sleep 3
-   open http://localhost:8501
-   ```
-5. Save as "Stock Analysis App" in your Applications folder
-6. **Drag to Dock** for easy access
-
-### Method 2: Terminal Alias (Quick Access)
-
-Add this to your `~/.zshrc` or `~/.bash_profile`:
+One command starts both servers:
 
 ```bash
-alias stock-app='cd /Users/barunshrestha/repo/Agents/ai_stock_analysis && ./start_app.sh'
+cd /Users/barunshrestha/Projects/Agents/ai_stock_analysis
+./start_dev.sh
 ```
 
-Then reload your terminal:
+Then open **http://localhost:3002**. Ctrl+C stops both.
+
+Or start them individually:
+
 ```bash
-source ~/.zshrc  # or source ~/.bash_profile
+# Backend (FastAPI with auto-reload)
+./venv/bin/python -m uvicorn backend.main:app --reload --port 8000
+
+# Frontend (Next.js dev server, port 3002)
+cd frontend && npm run dev
 ```
 
-Now you can start the app by typing: `stock-app`
+> The frontend dev port is pinned to **3002** in `frontend/package.json`
+> because 3000/3001 are used by other projects on this machine. If you change
+> it, add the new origin to `CORS_ORIGINS` in `.env` (see `backend/config.py`).
 
----
+### First-time setup
 
-## 🔄 Auto-Start on Login (Optional)
-
-### Using macOS LaunchAgent
-
-1. Create a launch agent file:
-   ```bash
-   nano ~/Library/LaunchAgents/com.stockanalysis.app.plist
-   ```
-
-2. Add this content:
-   ```xml
-   <?xml version="1.0" encoding="UTF-8"?>
-   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-   <plist version="1.0">
-   <dict>
-       <key>Label</key>
-       <string>com.stockanalysis.app</string>
-       <key>ProgramArguments</key>
-       <array>
-           <string>/Users/barunshrestha/repo/Agents/ai_stock_analysis/start_app.sh</string>
-       </array>
-       <key>RunAtLoad</key>
-       <true/>
-       <key>KeepAlive</key>
-       <false/>
-       <key>StandardOutPath</key>
-       <string>/tmp/stockanalysis.log</string>
-       <key>StandardErrorPath</key>
-       <string>/tmp/stockanalysis.error.log</string>
-   </dict>
-   </plist>
-   ```
-
-3. Load the launch agent:
-   ```bash
-   launchctl load ~/Library/LaunchAgents/com.stockanalysis.app.plist
-   ```
-
-4. To disable auto-start:
-   ```bash
-   launchctl unload ~/Library/LaunchAgents/com.stockanalysis.app.plist
-   ```
-
----
-
-## 📱 Mobile Access (Same Network)
-
-To access from your phone/tablet on the same WiFi:
-
-1. Find your Mac's IP address:
-   ```bash
-   ifconfig | grep "inet " | grep -v 127.0.0.1
-   ```
-
-2. Update `.streamlit/config.toml`:
-   ```toml
-   [server]
-   address = "0.0.0.0"  # Change from "localhost"
-   ```
-
-3. Access from mobile: `http://YOUR_MAC_IP:8501`
-
----
-
-## 🛑 Stopping the App
-
-- **If running in terminal**: Press `Ctrl+C`
-- **If running in background**:
-  ```bash
-  pkill -f "streamlit run"
-  ```
-
----
-
-## 🔧 Troubleshooting
-
-### Port Already in Use
 ```bash
-lsof -ti:8501 | xargs kill -9
-```
+# Python venv + dependencies
+python3 -m venv venv
+./venv/bin/pip install -e .
 
-### App Won't Start
-1. Check if virtual environment is activated
-2. Verify database connection in `.env`
-3. Check logs: `tail -f /tmp/stockanalysis.log`
+# Frontend dependencies
+cd frontend && npm install
 
-### Dependencies Missing
-```bash
-cd /Users/barunshrestha/repo/Agents/ai_stock_analysis
-source venv/bin/activate
-pip install -r requirements.txt  # or uv pip install -r requirements.txt
+# Environment (.env in repo root)
+# DATABASE_URL=postgresql://user:pass@localhost:5432/stock_analysis
+# OLLAMA_BASE_URL=http://localhost:11434   (optional)
+# OLLAMA_MODEL=gemma3:4b                   (optional)
+# FINNHUB_API_KEY=your_free_key            (optional — economic calendar on Dashboard)
 ```
 
 ---
 
-## 📊 App URL
+## Docker Compose (full stack)
 
-**Local Access**: http://localhost:8501
-**Network Access**: http://YOUR_IP:8501
+Runs PostgreSQL + backend + frontend in containers:
 
----
-
-## ✨ Tips
-
-1. **Keep Terminal Open**: Don't close the terminal window while using the app
-2. **Bookmark It**: Save `http://localhost:8501` in your browser favorites
-3. **Use Dock**: Add the Automator app to your Dock for one-click launch
-4. **Background Mode**: Use `nohup` to run in background (see below)
-
-### Running in Background
 ```bash
-cd /Users/barunshrestha/repo/Agents/ai_stock_analysis
-source venv/bin/activate
-nohup streamlit run app.py --server.port=8501 > /tmp/stockanalysis.log 2>&1 &
+docker compose up --build
 ```
 
+- Frontend: http://localhost:3000
+- Backend: http://localhost:8000 (interactive docs at `/docs`)
+- Postgres data persists in the `pgdata` volume.
+
+To reuse your **existing local PostgreSQL** instead of the bundled one,
+remove the `postgres` service from `docker-compose.yml` and set
+`DATABASE_URL` to point at your instance.
+
+Ollama stays on the host; the backend container reaches it through
+`host.docker.internal:11434`.
+
 ---
 
-## 🆘 Support
+## Vercel + VPS (alternative)
 
-For issues, check:
-- Database connection in `.env`
-- Virtual environment activation
-- Port availability (8501)
-- Python dependencies installed
+- **Frontend** deploys cleanly to Vercel: set the project root to `frontend/`
+  and add env var `NEXT_PUBLIC_API_URL=https://your-backend-host`.
+- **Backend** needs a long-running Python host (VPS, Fly.io, Railway):
+  build with `Dockerfile.backend`, supply `DATABASE_URL` and `CORS_ORIGINS`
+  (set to your Vercel domain).
+- Note: AI features require Ollama reachable from the backend host.
 
+---
+
+## Health Checks & Troubleshooting
+
+```bash
+# Is the backend up and connected to the DB?
+curl http://localhost:8000/api/health
+# -> {"status":"ok","database":"connected"}
+
+# Port already in use?
+lsof -ti tcp:8000 -sTCP:LISTEN   # find the PID
+```
+
+| Symptom | Fix |
+|---------|-----|
+| `database: unavailable` in health check | Check `DATABASE_URL` in `.env`; is Postgres running? |
+| AI buttons show "Ollama is not running" | Start it: `ollama serve` (and `ollama pull gemma3:4b` once) |
+| Yahoo data errors | The backend uses `curl_cffi` browser impersonation; transient Yahoo blocks usually resolve on retry |
+| Frontend can't reach API (CORS) | Add the frontend origin to `CORS_ORIGINS` env var |
+
+---
+
+## Legacy Streamlit App
+
+The original Streamlit app (`app.py`) still works and is untouched:
+
+```bash
+./venv/bin/python -m streamlit run app.py --server.port=8501
+```
+
+It will be removed once you confirm the new UI has full parity.

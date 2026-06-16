@@ -1,5 +1,4 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
@@ -16,6 +15,7 @@ from formatting_utils import (
     format_financial_statement_value
 )
 from scanner import scan_stock, fetch_stock_data, calculate_technical_indicators, calculate_sma
+from yahoo_session import get_ticker, with_retry, get_earnings_history
 
 # Load environment variables from .env file
 load_dotenv()
@@ -24,22 +24,7 @@ load_dotenv()
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma3:4b")
 OLLAMA_ANALYSIS_MODEL = os.getenv("OLLAMA_ANALYSIS_MODEL", "gemma3:4b")
-DEFAULT_LLM_MODELS = ["gemma3:4b", "llama3.2", "llama3.1", "mistral", "qwen2.5", "phi3", "deepseek-r1"]
 AI_EXECUTOR = ThreadPoolExecutor(max_workers=2)
-
-
-def get_ollama_models():
-    """Return list of available Ollama model names; fallback to defaults if API unreachable."""
-    import urllib.request
-    import json
-    try:
-        req = urllib.request.Request(f"{OLLAMA_BASE_URL.rstrip('/')}/api/tags", method="GET")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode())
-        names = [m.get("name", "") for m in (data.get("models") or []) if m.get("name")]
-        return names if names else DEFAULT_LLM_MODELS
-    except Exception:
-        return DEFAULT_LLM_MODELS
 
 
 def call_ollama(
@@ -251,7 +236,7 @@ Trend Context: {trend_context}
     return data_context
 
 
-def generate_ollama_point_analysis(stock_symbol, company_name, info, hist_data, earnings_data, trend_context, point_number, point_title, point_instruction, model=None):
+def generate_ollama_point_analysis(stock_symbol, company_name, info, hist_data, earnings_data, trend_context, point_number, point_title, point_instruction):
     """Generate one Ollama answer for a single requested analysis point."""
     data_context = build_ollama_analysis_data_context(
         stock_symbol, company_name, info, hist_data, earnings_data, trend_context
@@ -282,7 +267,7 @@ Formatting requirements:
         user_prompt,
         temperature=0.35,
         max_tokens=2400,
-        model=model or OLLAMA_ANALYSIS_MODEL
+        model=OLLAMA_ANALYSIS_MODEL
     )
     if not content:
         if ollama_error:
@@ -408,8 +393,6 @@ if 'stock_analysis_context' not in st.session_state:
     st.session_state.stock_analysis_context = None
 if 'ollama_analysis_context' not in st.session_state:
     st.session_state.ollama_analysis_context = None
-if 'selected_ollama_model' not in st.session_state:
-    st.session_state.selected_ollama_model = OLLAMA_MODEL
 
 # Sidebar for inputs
 # Initialize analyze_button to avoid undefined variable errors
@@ -453,16 +436,6 @@ with st.sidebar:
                     picked = st.selectbox("Pick symbol from industry", [""] + sym_opts, key="sa_industry_symbol")
                     if picked:
                         stock_symbol = picked
-
-        llm_models = get_ollama_models()
-        if st.session_state.selected_ollama_model not in llm_models:
-            llm_models = [st.session_state.selected_ollama_model] + llm_models
-        st.selectbox(
-            "LLM model (for AI analysis)",
-            options=llm_models,
-            index=llm_models.index(st.session_state.selected_ollama_model) if st.session_state.selected_ollama_model in llm_models else 0,
-            key="selected_ollama_model",
-        )
         
         # Analysis options
         show_fundamental_analysis = st.checkbox(
@@ -519,16 +492,6 @@ with st.sidebar:
                     picked = st.selectbox("Pick symbol from industry", [""] + sym_opts, key="ollama_industry_symbol")
                     if picked:
                         ollama_symbol = picked
-
-        llm_models_oa = get_ollama_models()
-        if st.session_state.selected_ollama_model not in llm_models_oa:
-            llm_models_oa = [st.session_state.selected_ollama_model] + llm_models_oa
-        st.selectbox(
-            "LLM model",
-            options=llm_models_oa,
-            index=llm_models_oa.index(st.session_state.selected_ollama_model) if st.session_state.selected_ollama_model in llm_models_oa else 0,
-            key="selected_ollama_model",
-        )
 
         ollama_use_database = st.checkbox(
             "Use cached data from database",
@@ -610,16 +573,6 @@ with st.sidebar:
                     if picked:
                         automation_ticker = picked
 
-        llm_models_auto = get_ollama_models()
-        if st.session_state.selected_ollama_model not in llm_models_auto:
-            llm_models_auto = [st.session_state.selected_ollama_model] + llm_models_auto
-        st.selectbox(
-            "LLM model (for AI setup analysis)",
-            options=llm_models_auto,
-            index=llm_models_auto.index(st.session_state.selected_ollama_model) if st.session_state.selected_ollama_model in llm_models_auto else 0,
-            key="selected_ollama_model",
-        )
-
         automation_button = st.button("🚀 Generate Trade Setups", type="primary", key="automation_analyze")
         
         st.markdown("---")
@@ -654,7 +607,7 @@ with st.sidebar:
                         
                         # Also try to fetch and save basic stock info to ensure symbol is in database
                         try:
-                            ticker = yf.Ticker(new_stock)
+                            ticker = get_ticker(new_stock)
                             info = ticker.info
                             if info and info.get('symbol'):
                                 db.save_stock_info(new_stock, info)
@@ -810,7 +763,7 @@ with st.sidebar:
 def get_realtime_price(symbol):
     """Get real-time price for a single stock"""
     try:
-        ticker = yf.Ticker(symbol)
+        ticker = get_ticker(symbol)
         # Use fast_info for quick price fetch
         info = ticker.fast_info
         current_price = info.get('lastPrice') or info.get('regularMarketPrice')
@@ -821,16 +774,47 @@ def get_realtime_price(symbol):
         return None
 
 def validate_stock_symbol(symbol):
-    """Validate if the stock symbol exists and has data"""
+    """Validate if the stock symbol exists and has data.
+
+    Tries the full `info` payload first; if Yahoo returns a malformed
+    response (which surfaces inside yfinance as cryptic errors like
+    "'NoneType' object is not subscriptable"), falls back to the
+    lighter-weight `fast_info` endpoint before giving up.
+    """
+    ticker = get_ticker(symbol)
+
+    # `info` raising means Yahoo gave us a transport / parse error
+    # (rate-limit, HTML error page, malformed JSON). `info` returning a
+    # dict-with-no-price means Yahoo answered cleanly but doesn't know
+    # the symbol -> treat as "not found" without retrying.
+    transport_error: Exception | None = None
     try:
-        ticker = yf.Ticker(symbol)
         info = ticker.info
-        # Check if we have basic company information
-        if 'symbol' not in info or info.get('regularMarketPrice') is None:
-            return False, "Invalid stock symbol or no market data available"
-        return True, None
-    except Exception as e:
-        return False, f"Error validating symbol: {str(e)}"
+        if isinstance(info, dict) and 'symbol' in info and info.get('regularMarketPrice') is not None:
+            return True, None
+        # Yahoo answered but with no usable data => invalid symbol.
+        return False, f"Symbol '{symbol}' not found or has no market data on Yahoo Finance."
+    except Exception as exc:
+        transport_error = exc
+
+    # Reaching here means the `info` call itself failed. Try the
+    # lighter fast_info endpoint, which often survives when
+    # quoteSummary is being rate-limited.
+    try:
+        fast = ticker.fast_info
+        last_price = fast.get('lastPrice') if hasattr(fast, 'get') else None
+        if last_price is None:
+            last_price = getattr(fast, 'last_price', None)
+        if last_price is not None:
+            return True, None
+    except Exception:
+        pass
+
+    return False, (
+        f"Could not validate '{symbol}'. Yahoo Finance is currently "
+        f"unreachable or rate-limiting requests. Try again in a moment. "
+        f"(detail: {transport_error})"
+    )
 
 def get_stock_data(symbol, period, use_database=True, include_financials=False):
     """Fetch comprehensive stock data from Yahoo Finance or database"""
@@ -865,32 +849,26 @@ def get_stock_data(symbol, period, use_database=True, include_financials=False):
         
         # Fetch fresh data from Yahoo Finance
         # st.info(f"Fetching fresh data from Yahoo Finance for {symbol}")
-        ticker = yf.Ticker(symbol)
+        ticker = get_ticker(symbol)
         
-        # Get historical data
-        hist_data = ticker.history(period=period)
+        # Get historical data (retry transient Yahoo errors)
+        hist_data = with_retry(lambda: ticker.history(period=period))
         if hist_data.empty:
             return None, None, None, None, "No historical data available for this symbol"
         
         # Get additional 3-month volume data for detailed analysis
-        volume_3m = ticker.history(period="3mo")
+        volume_3m = with_retry(lambda: ticker.history(period="3mo"))
         if not volume_3m.empty:
             # Store 3-month data as an attribute using setattr to avoid pandas warning
             setattr(hist_data, 'volume_3m', volume_3m)
         
-        # Get company info
-        info = ticker.info
+        # Get company info (retry transient Yahoo errors)
+        info = with_retry(lambda: ticker.info)
         
-        # Get earnings data (last 5 years)
-        try:
-            earnings = ticker.earnings
-            if earnings is not None and not earnings.empty:
-                # Get last 5 years of earnings data
-                earnings_5y = earnings.tail(5)
-            else:
-                earnings_5y = None
-        except:
-            earnings_5y = None
+        # Get earnings data (last 5 years). `Ticker.earnings` was
+        # deprecated and removed in yfinance 1.x; we now derive it from
+        # the Net Income row of `income_stmt`.
+        earnings_5y = with_retry(lambda: get_earnings_history(ticker, years=5))
         
         # Get financial statements if requested
         if include_financials:
@@ -947,7 +925,7 @@ def calculate_financial_metrics(hist_data, info):
         st.error(f"Error calculating metrics: {str(e)}")
         return {}
 
-def generate_ai_stock_summary(stock_symbol, company_name, info, metrics, hist_data, earnings_data, financials, model=None):
+def generate_ai_stock_summary(stock_symbol, company_name, info, metrics, hist_data, earnings_data, financials):
     """
     Generate AI-powered stock analysis summary including:
     1. Company health summary
@@ -1027,7 +1005,7 @@ Provide your analysis in the following format:
 [Provide a clear Buy, Sell, or Hold recommendation with detailed reasoning. Explain the investment thesis, valuation considerations, risk-reward profile, and time horizon. Be specific about what would change your recommendation.]
 
 Format your response using clear markdown sections. Be professional, analytical, and data-driven. Use specific numbers and metrics from the data provided."""
-        content = call_ollama(system_prompt, user_prompt, temperature=0.7, max_tokens=2000, model=model or OLLAMA_MODEL)
+        content = call_ollama(system_prompt, user_prompt, temperature=0.7, max_tokens=2000)
         if content:
             return content
         
@@ -2553,7 +2531,7 @@ def display_portfolio_grid(portfolio_data):
                 pass
         
         # Apply styling to percentage columns
-        styled_overview = sorted_df_overview.style.applymap(
+        styled_overview = sorted_df_overview.style.map(
             color_percentages,
             subset=percentage_cols_overview
         )
@@ -2921,7 +2899,7 @@ def display_portfolio_grid(portfolio_data):
                 pass
         
         # Apply styling to percentage columns
-        styled_income = sorted_df_inc.style.applymap(
+        styled_income = sorted_df_inc.style.map(
             color_percentages,
             subset=percentage_cols_income
         )
@@ -3086,7 +3064,7 @@ def display_portfolio_grid(portfolio_data):
                 pass
         
         # Apply styling to percentage columns
-        styled_balance = sorted_df_bal.style.applymap(
+        styled_balance = sorted_df_bal.style.map(
             color_percentages,
             subset=percentage_cols_balance
         )
@@ -3233,7 +3211,7 @@ def display_portfolio_grid(portfolio_data):
                 pass
         
         # Apply styling to percentage columns
-        styled_cashflow = sorted_df_cf.style.applymap(
+        styled_cashflow = sorted_df_cf.style.map(
             color_percentages,
             subset=percentage_cols_cashflow
         )
@@ -3839,7 +3817,7 @@ elif page == "DCA":
                         final_shares[symbol] = hist_score[shares_col].iloc[-1]
                         # Get final price
                         try:
-                            ticker = yf.Ticker(symbol)
+                            ticker = get_ticker(symbol)
                             hist = ticker.history(period="1d")
                             if not hist.empty:
                                 final_prices[symbol] = hist['Close'].iloc[-1]
@@ -3969,7 +3947,7 @@ elif page == "Automation" and automation_button and automation_ticker:
                             
                             # Get news and fundamentals
                             try:
-                                ticker = yf.Ticker(automation_ticker)
+                                ticker = get_ticker(automation_ticker)
                                 info = ticker.info
                                 company_name = info.get('longName', automation_ticker)
                                 
@@ -4032,10 +4010,7 @@ elif page == "Automation" and automation_button and automation_ticker:
 
 Provide a concise, actionable analysis (2-3 paragraphs) that helps a trader understand if this setup makes sense from both technical and fundamental perspectives."""
                                                 system_prompt = "You are an expert financial analyst specializing in technical analysis and market sentiment. Provide clear, actionable insights."
-                                                ai_analysis = call_ollama(
-                                                    system_prompt, user_prompt, temperature=0.7, max_tokens=500,
-                                                    model=st.session_state.get("selected_ollama_model") or OLLAMA_MODEL
-                                                )
+                                                ai_analysis = call_ollama(system_prompt, user_prompt, temperature=0.7, max_tokens=500)
                                                 if ai_analysis:
                                                     st.markdown(ai_analysis)
                                                 else:
@@ -4233,8 +4208,7 @@ elif page == "Stock Analysis" and st.session_state.get('stock_analysis_context')
                         metrics,
                         hist_data,
                         earnings_data,
-                        financials,
-                        st.session_state.get("selected_ollama_model") or OLLAMA_MODEL,
+                        financials
                     )
                     st.rerun()
             with action_col2:
@@ -4254,7 +4228,7 @@ elif page == "Stock Analysis" and st.session_state.get('stock_analysis_context')
             with ai_summary_container:
                 if st.session_state.ai_summary_result:
                     st.markdown(st.session_state.ai_summary_result)
-                    st.caption(f"🤖 Using AI model: {st.session_state.get('selected_ollama_model', OLLAMA_MODEL)}")
+                    st.caption(f"🤖 Using AI model: {OLLAMA_MODEL}")
                 elif st.session_state.ai_summary_future is not None:
                     st.info("AI summary is generating in background. You can continue using the page and click 'Refresh AI Status'.")
                 elif st.session_state.ai_summary_error:
@@ -4545,8 +4519,7 @@ elif page == "Ollama Analysis" and st.session_state.get('ollama_analysis_context
                 }
 
             st.subheader("🧠 Ollama Analysis (On-demand per point)")
-            selected_model = st.session_state.get("selected_ollama_model") or OLLAMA_ANALYSIS_MODEL
-            st.caption(f"Model: {selected_model}")
+            st.caption(f"Model: {OLLAMA_ANALYSIS_MODEL}")
 
             point_definitions = [
                 (1, "What the company actually does", "Explain the core business, products/services, customers, and business model in simple terms."),
@@ -4566,7 +4539,7 @@ elif page == "Ollama Analysis" and st.session_state.get('ollama_analysis_context
                 (15, "Risk management", "Provide position sizing, max loss, invalidation, and trade management rules.")
             ]
 
-            analysis_context_key = f"{ollama_symbol}:{ollama_period}:{selected_model}"
+            analysis_context_key = f"{ollama_symbol}:{ollama_period}:{OLLAMA_ANALYSIS_MODEL}"
             if "ollama_point_cache" not in st.session_state:
                 st.session_state.ollama_point_cache = {}
             if "ollama_point_error" not in st.session_state:
@@ -4590,8 +4563,7 @@ elif page == "Ollama Analysis" and st.session_state.get('ollama_analysis_context
                             trend_context,
                             point_number,
                             point_title,
-                            point_instruction,
-                            model=selected_model,
+                            point_instruction
                         )
                     if ollama_error:
                         point_errors[point_number] = ollama_error
@@ -4653,7 +4625,7 @@ elif page == "By Industry":
                         st.success(f"Added **{syms_str}** to {total_ok} industry assignment(s).")
                         for add_symbol in add_symbols:
                             try:
-                                ticker = yf.Ticker(add_symbol)
+                                ticker = get_ticker(add_symbol)
                                 info = ticker.info
                                 if info and info.get("symbol"):
                                     db.save_stock_info(add_symbol, info)

@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Stock Financial Analysis Application with Streamlit and PostgreSQL"
 requires-python = ">=3.11"
 dependencies = [
+    "curl-cffi>=0.7.0",
+    "feedparser>=6.0.0",
+    "fastapi>=0.115.0",
     "numpy>=2.2.6",
     "pandas>=2.2.3",
     "plotly>=6.1.2",
@@ -11,9 +14,11 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "sqlalchemy>=2.0.41",
     "streamlit>=1.45.1",
-    "yfinance>=0.2.61",
+    "uvicorn>=0.30.0",
+    "yfinance>=1.3.0",
 ]
 # AI uses Ollama (local, no extra dependencies)
 
 [tool.setuptools]
-py-modules = ["app", "database", "formatting_utils"]
+py-modules = ["app", "database", "formatting_utils", "scanner", "yahoo_session"]
+packages = ["backend", "backend.routers", "backend.services"]

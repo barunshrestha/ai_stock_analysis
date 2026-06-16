@@ -3,11 +3,12 @@ Stock Scanner and Technical Analysis Module
 Fetches stock data and calculates technical indicators to identify trading setups
 """
 
-import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import json
+
+from yahoo_session import get_ticker, with_retry
 
 
 def calculate_sma(data, window=20):
@@ -43,8 +44,8 @@ def fetch_stock_data(ticker, days=60):
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days + 10)  # Add buffer for indicator calculations
         
-        stock = yf.Ticker(ticker)
-        hist_data = stock.history(start=start_date, end=end_date)
+        stock = get_ticker(ticker)
+        hist_data = with_retry(lambda: stock.history(start=start_date, end=end_date))
         
         if hist_data.empty:
             return None, "No data available for this ticker"
