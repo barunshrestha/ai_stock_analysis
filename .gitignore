@@ -46,6 +46,15 @@ venv.bak/
 # Streamlit
 .streamlit/
 
+# Next.js / Node (frontend build artifacts)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+frontend/coverage/
+frontend/.eslintcache
+frontend/.tsbuildinfo
+
 # Database
 *.db
 *.sqlite
