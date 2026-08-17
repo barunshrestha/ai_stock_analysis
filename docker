@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Docker CLI wrapper — use when `docker` is not on your PATH.
+#
+#   ./docker compose up -d --build backend
+#   ./docker compose ps
+#   ./docker compose logs -f backend
+#   ./docker compose down
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/resolve-docker.sh
+source "${ROOT}/scripts/resolve-docker.sh"
+
+require_docker || exit 1
+exec docker "$@"
