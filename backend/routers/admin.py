@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.deps import get_db
+from backend.services.grid_service import build_grid_rows
 
 router = APIRouter(prefix="/api/admin/industries", tags=["admin"])
 
@@ -23,6 +24,20 @@ class SetIndustriesRequest(BaseModel):
 def list_industries(db=Depends(get_db)):
     """All industries with their assigned stocks."""
     return {"industries": db.admin_get_industries_with_stocks() or {}}
+
+
+@router.get("/{industry}/grid")
+def industry_grid(industry: str, db=Depends(get_db), period: str = Query("1y")):
+    """Comprehensive grid data for every stock in an industry."""
+    stocks = db.admin_get_stocks_by_industry(industry)
+    if not stocks:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Industry '{industry}' not found or has no stocks",
+        )
+    symbols = [s["symbol"] for s in stocks]
+    rows, errors = build_grid_rows(symbols, period)
+    return {"industry": industry, "rows": rows, "errors": errors}
 
 
 @router.post("/assign", status_code=201)

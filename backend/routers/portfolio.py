@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.deps import get_db
 from backend.services import stock_service
+from backend.services.grid_service import build_grid_rows
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
 
@@ -19,30 +20,7 @@ def get_portfolio(db=Depends(get_db)):
 def portfolio_grid(db=Depends(get_db), period: str = Query("1y")):
     """Comprehensive grid data for every portfolio symbol (raw values)."""
     symbols = db.get_portfolio() or []
-    rows = []
-    errors = {}
-    for symbol in symbols:
-        try:
-            hist = stock_service.get_history(symbol, period)
-            if hist is None or hist.empty:
-                errors[symbol] = "no history"
-                continue
-            info = stock_service.get_info(symbol)
-            metrics = stock_service.compute_metrics(hist, info)
-            # 6-month sparkline (~126 trading days), downsampled to keep payload small.
-            spark = hist["Close"].tail(126)
-            step = max(1, len(spark) // 60)
-            rows.append(
-                {
-                    "symbol": symbol,
-                    "name": info.get("longName") or info.get("shortName") or symbol,
-                    "sector": info.get("sector"),
-                    "metrics": metrics,
-                    "sparkline": [round(float(v), 2) for v in spark.iloc[::step]],
-                }
-            )
-        except Exception as exc:
-            errors[symbol] = str(exc)
+    rows, errors = build_grid_rows(symbols, period)
     return {"rows": rows, "errors": errors}
 
 

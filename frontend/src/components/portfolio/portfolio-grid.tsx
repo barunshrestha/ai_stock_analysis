@@ -13,7 +13,12 @@ import {
 } from "@tanstack/react-table";
 import { ArrowDown, ArrowUp, ArrowUpDown, Download, Trash2 } from "lucide-react";
 
-import { api, type StockMetrics } from "@/lib/api";
+import {
+  api,
+  type PortfolioGridRow,
+  type PortfolioView,
+  type StockMetrics,
+} from "@/lib/api";
 import {
   changeColor,
   formatCompact,
@@ -35,14 +40,6 @@ import {
 } from "@/components/ui/table";
 import { AddStockDialog } from "@/components/portfolio/add-stock-dialog";
 import { Sparkline } from "@/components/portfolio/sparkline";
-
-interface GridRow {
-  symbol: string;
-  name: string;
-  sector: string | null;
-  metrics: StockMetrics;
-  sparkline: number[];
-}
 
 type Formatter = "price" | "pct" | "signedPct" | "compact" | "number";
 
@@ -116,28 +113,31 @@ function formatValue(value: number | null, fmt: Formatter): string {
 function buildColumns(
   tab: string,
   onRemove: (symbol: string) => void,
-): ColumnDef<GridRow>[] {
-  const metricCols: ColumnDef<GridRow>[] = TAB_COLUMNS[tab].map((col) => ({
-    id: col.key,
-    accessorFn: (row) => row.metrics[col.key] ?? undefined,
-    sortUndefined: "last",
-    header: col.label,
-    cell: ({ row }) => {
-      const value = row.original.metrics[col.key];
-      return (
-        <span
-          className={cn(
-            "tabular-nums",
-            col.fmt === "signedPct" && changeColor(value),
-          )}
-        >
-          {formatValue(value, col.fmt)}
-        </span>
-      );
-    },
-  }));
+  showActions: boolean,
+): ColumnDef<PortfolioGridRow>[] {
+  const metricCols: ColumnDef<PortfolioGridRow>[] = TAB_COLUMNS[tab].map(
+    (col) => ({
+      id: col.key,
+      accessorFn: (row) => row.metrics[col.key] ?? undefined,
+      sortUndefined: "last",
+      header: col.label,
+      cell: ({ row }) => {
+        const value = row.original.metrics[col.key];
+        return (
+          <span
+            className={cn(
+              "tabular-nums",
+              col.fmt === "signedPct" && changeColor(value),
+            )}
+          >
+            {formatValue(value, col.fmt)}
+          </span>
+        );
+      },
+    }),
+  );
 
-  return [
+  const columns: ColumnDef<PortfolioGridRow>[] = [
     {
       id: "symbol",
       accessorKey: "symbol",
@@ -171,7 +171,10 @@ function buildColumns(
       cell: ({ row }) => <Sparkline values={row.original.sparkline} />,
     },
     ...metricCols,
-    {
+  ];
+
+  if (showActions) {
+    columns.push({
       id: "actions",
       header: "",
       enableSorting: false,
@@ -186,11 +189,13 @@ function buildColumns(
           <Trash2 className="size-4" />
         </Button>
       ),
-    },
-  ];
+    });
+  }
+
+  return columns;
 }
 
-function exportCsv(rows: GridRow[], tab: string) {
+function exportCsv(rows: PortfolioGridRow[], tab: string, filePrefix: string) {
   const cols = TAB_COLUMNS[tab];
   const header = ["Symbol", "Company", "Sector", ...cols.map((c) => c.label)];
   const lines = rows.map((row) =>
@@ -205,19 +210,27 @@ function exportCsv(rows: GridRow[], tab: string) {
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
   const a = document.createElement("a");
   a.href = url;
-  a.download = `portfolio-${tab}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `${filePrefix}-${tab}-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
 
-export function PortfolioGrid() {
+interface PortfolioGridProps {
+  view: PortfolioView;
+}
+
+export function PortfolioGrid({ view }: PortfolioGridProps) {
   const queryClient = useQueryClient();
   const [tab, setTab] = React.useState("performance");
   const [sorting, setSorting] = React.useState<SortingState>([]);
+  const isPortfolio = view.mode === "portfolio";
 
   const { data, isPending, isError, error } = useQuery({
-    queryKey: ["portfolio", "grid"],
-    queryFn: () => api.portfolioGrid(),
+    queryKey: isPortfolio
+      ? ["portfolio", "grid"]
+      : ["industry", "grid", view.industry],
+    queryFn: () =>
+      isPortfolio ? api.portfolioGrid() : api.industryGrid(view.industry),
   });
 
   const removeMutation = useMutation({
@@ -231,8 +244,15 @@ export function PortfolioGrid() {
     [removeMutation],
   );
 
-  const columns = React.useMemo(() => buildColumns(tab, onRemove), [tab, onRemove]);
+  const columns = React.useMemo(
+    () => buildColumns(tab, onRemove, isPortfolio),
+    [tab, onRemove, isPortfolio],
+  );
   const rows = React.useMemo(() => data?.rows ?? [], [data]);
+
+  const csvPrefix = isPortfolio
+    ? "portfolio"
+    : `industry-${view.industry.replaceAll(/[^a-zA-Z0-9_-]+/g, "-")}`;
 
   const table = useReactTable({
     data: rows,
@@ -254,7 +274,7 @@ export function PortfolioGrid() {
   if (isError) {
     return (
       <p className="py-12 text-center text-sm text-muted-foreground">
-        Failed to load portfolio:{" "}
+        Failed to load {isPortfolio ? "portfolio" : "industry"}:{" "}
         {error instanceof Error ? error.message : "unknown error"}
       </p>
     );
@@ -280,13 +300,13 @@ export function PortfolioGrid() {
           <Button
             size="sm"
             variant="outline"
-            onClick={() => exportCsv(rows, tab)}
+            onClick={() => exportCsv(rows, tab, csvPrefix)}
             disabled={rows.length === 0}
           >
             <Download className="size-4" />
             CSV
           </Button>
-          <AddStockDialog />
+          {isPortfolio && <AddStockDialog />}
         </div>
       </div>
 
@@ -298,10 +318,22 @@ export function PortfolioGrid() {
 
       {rows.length === 0 ? (
         <div className="flex flex-col items-center gap-3 py-20 text-center">
-          <p className="text-sm text-muted-foreground">
-            Your portfolio is empty. Add a stock to start tracking it.
-          </p>
-          <AddStockDialog />
+          {isPortfolio ? (
+            <>
+              <p className="text-sm text-muted-foreground">
+                Your portfolio is empty. Add a stock to start tracking it.
+              </p>
+              <AddStockDialog />
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              No stocks in <strong>{view.industry}</strong>. Assign stocks in{" "}
+              <Link href="/admin/industries" className="underline">
+                Industries (Admin)
+              </Link>
+              .
+            </p>
+          )}
         </div>
       ) : (
         <div className="overflow-x-auto rounded-md border">

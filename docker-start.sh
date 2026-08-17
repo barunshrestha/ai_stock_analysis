@@ -5,50 +5,16 @@
 #   Backend  : http://localhost:8000  (docs at /docs)
 #   Postgres : localhost:5432
 #
-# Stop and free ports:  docker compose down
-# Logs:                 docker compose logs -f
+# Stop and free ports:  ./docker compose down
+# Logs:                 ./docker compose logs -f
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-# Docker Desktop installs the CLI inside the app bundle; symlinks in /usr/local/bin
-# appear only after Docker Desktop has been opened at least once.
-resolve_docker() {
-  if command -v docker >/dev/null 2>&1; then
-    return 0
-  fi
-  local dir candidate
-  for candidate in \
-    /usr/local/bin/docker \
-    /opt/homebrew/bin/docker \
-    "${HOME}/.docker/bin/docker" \
-    /Applications/Docker.app/Contents/Resources/bin/docker; do
-    if [ -x "$candidate" ]; then
-      dir="$(dirname "$candidate")"
-      export PATH="${dir}:${PATH}"
-      return 0
-    fi
-  done
-  return 1
-}
+# shellcheck source=scripts/resolve-docker.sh
+source "$(dirname "$0")/scripts/resolve-docker.sh"
 
-if ! resolve_docker; then
-  echo "Docker CLI not found." >&2
-  echo "" >&2
-  echo "If Docker Desktop is installed, open it once (menu bar whale → Running)," >&2
-  echo "then re-run:  ./docker-start.sh" >&2
-  echo "" >&2
-  echo "Otherwise install Docker Desktop for Mac:" >&2
-  echo "  https://docs.docker.com/desktop/setup/install/mac-install/" >&2
-  echo "" >&2
-  echo "Without Docker, use local dev:  ./start_dev.sh" >&2
-  exit 1
-fi
-
-if ! docker info >/dev/null 2>&1; then
-  echo "Docker is installed but the daemon is not running." >&2
-  echo "Open Docker Desktop, wait until it says 'Running', then re-run:" >&2
-  echo "  ./docker-start.sh" >&2
+if ! require_docker; then
   exit 1
 fi
 
@@ -104,6 +70,7 @@ echo "  Backend   http://localhost:8000"
 echo "  API docs  http://localhost:8000/docs"
 echo ""
 echo "Commands:"
-echo "  docker compose ps          # status"
-echo "  docker compose logs -f     # live logs"
-echo "  docker compose down        # stop and free ports"
+echo "  ./docker compose ps          # status"
+echo "  ./docker compose logs -f     # live logs"
+echo "  ./docker compose down        # stop and free ports"
+echo "  ./docker-rebuild-backend.sh  # rebuild backend only"

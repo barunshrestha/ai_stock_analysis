@@ -25,6 +25,33 @@ cd /Users/barunshrestha/Projects/Agents/ai_stock_analysis
 
 Then open **http://localhost:3002**. Ctrl+C stops both.
 
+### Local dev alongside Docker (Option 2)
+
+Keep Docker running on **:8000** / **:3002** and develop with hot reload on alternate ports:
+
+```bash
+./start_dev_local.sh
+```
+
+Then open **http://localhost:3003** (API at **http://127.0.0.1:8001**).
+
+Config is persistent — no need to pass ports or env vars each time:
+
+| File | Purpose |
+|------|---------|
+| [`.env`](.env) | `DATABASE_URL` and shared secrets (same DB as Docker Postgres on :5432) |
+| [`.env.dev-local`](.env.dev-local) | CORS for :3003, Ollama on host |
+| [`frontend/.env.local`](frontend/.env.local) | `NEXT_PUBLIC_API_URL=http://127.0.0.1:8001` |
+
+Local dev uses your existing `.env` `DATABASE_URL` (e.g. `stock_user@localhost:5432`). Edit `.env.dev-local` only for CORS/Ollama overrides.
+
+```bash
+curl http://127.0.0.1:8001/api/health   # local backend
+curl http://127.0.0.1:8000/api/health   # Docker backend
+```
+
+> Do **not** run `./start_dev.sh` while using this — it binds **8000** and **3002**, which Docker already uses.
+
 Or start them individually:
 
 ```bash
@@ -75,8 +102,11 @@ cp .env.example .env   # edit FINNHUB_API_KEY etc. if needed
 Or manually:
 
 ```bash
-docker compose up -d --build
+./docker compose up -d --build
 ```
+
+> **Docker not on PATH?** Use `./docker` instead of `docker` (wrapper finds Docker Desktop).
+> Rebuild backend only: `./docker-rebuild-backend.sh`
 
 **URLs:**
 
@@ -92,11 +122,12 @@ Postgres data persists in the `pgdata` volume.
 **Day-to-day commands:**
 
 ```bash
-docker compose ps              # status
-docker compose logs -f         # live logs
-docker compose restart backend # restart one service
-docker compose up -d --build   # rebuild after code changes
-docker compose down            # stop and free ports 8000, 3002, 5432
+./docker compose ps              # status
+./docker compose logs -f         # live logs
+./docker compose restart backend # restart one service
+./docker compose up -d --build   # rebuild after code changes
+./docker compose up -d --build backend   # backend only
+./docker compose down            # stop and free ports 8000, 3002, 5432
 ```
 
 > **Do not run `./start_dev.sh` while Docker is up** — both bind port 8000.
