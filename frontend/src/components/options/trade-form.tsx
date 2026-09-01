@@ -4,7 +4,13 @@ import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-import type { OptionTradeCreatePayload, OptionLeg, StrategyType, ParseImageResult } from "@/lib/api";
+import type {
+  CspScreenResult,
+  OptionTradeCreatePayload,
+  OptionLeg,
+  StrategyType,
+  ParseImageResult,
+} from "@/lib/api";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LEG_COUNTS, STRATEGY_LABELS } from "@/components/options/constants";
 import { PreTradeAnalysisPanel } from "@/components/options/pretrade-analysis-panel";
+import { CspScreenPanel } from "@/components/options/csp-screen-panel";
 import type { PreTradeAnalysis } from "@/lib/api";
 
 const SIDES = [
@@ -53,6 +60,7 @@ export function TradeForm() {
   const [notes, setNotes] = useState("");
   const [broker, setBroker] = useState("");
   const [preTrade, setPreTrade] = useState<PreTradeAnalysis | null>(null);
+  const [cspScreen, setCspScreen] = useState<CspScreenResult | null>(null);
   const [parseInfo, setParseInfo] = useState<ParseImageResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [step, setStep] = useState<"form" | "analyze">("form");
@@ -60,6 +68,52 @@ export function TradeForm() {
   const onStrategyChange = (s: StrategyType) => {
     setStrategy(s);
     setLegs(buildLegs(s));
+  };
+
+  const isCspStrategy = strategy === "cash_secured_put" || strategy === "short_put";
+
+  const screenMut = useMutation({
+    mutationFn: () => api.cspScreen(ticker),
+    onSuccess: (data) => {
+      setCspScreen(data);
+      setError(null);
+    },
+    onError: (e: Error) => setError(e instanceof ApiError ? e.message : "CSP screen failed"),
+  });
+
+  const applySuggestedContract = () => {
+    const c = cspScreen?.suggested_contract;
+    if (!c) return;
+    if (c.expiration.includes("/")) {
+      const [m, d, y] = c.expiration.split("/");
+      setExpirationDate(`${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`);
+    } else {
+      setExpirationDate(c.expiration.slice(0, 10));
+    }
+    setNetCreditDebit(String(c.premium_mid));
+    setLegs((prev) =>
+      prev.map((leg, i) =>
+        i === 0
+          ? {
+              ...leg,
+              strike: c.strike,
+              premium_per_contract: c.premium_mid,
+              option_type: "put",
+              side: "sell_to_open",
+            }
+          : leg,
+      ),
+    );
+  };
+
+  const handleSave = () => {
+    if (cspScreen?.recommendation_color === "red") {
+      const ok = window.confirm(
+        "CSP screen flagged elevated risk (red). Save this trade anyway?",
+      );
+      if (!ok) return;
+    }
+    saveMut.mutate();
   };
 
   const payload = (): OptionTradeCreatePayload => ({
@@ -119,12 +173,13 @@ export function TradeForm() {
   if (step === "analyze") {
     return (
       <div className="space-y-4">
+        {cspScreen && <CspScreenPanel screen={cspScreen} onApply={applySuggestedContract} />}
         <PreTradeAnalysisPanel analysis={preTrade} />
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setStep("form")}>
             Adjust trade
           </Button>
-          <Button onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
+          <Button onClick={handleSave} disabled={saveMut.isPending}>
             {saveMut.isPending ? "Saving…" : "Save trade"}
           </Button>
         </div>
@@ -203,7 +258,23 @@ export function TradeForm() {
           </label>
           <label className="space-y-1 text-sm">
             <span className="text-muted-foreground">Ticker</span>
-            <Input value={ticker} onChange={(e) => setTicker(e.target.value.toUpperCase())} placeholder="AAPL" />
+            <div className="flex gap-2">
+              <Input
+                value={ticker}
+                onChange={(e) => setTicker(e.target.value.toUpperCase())}
+                placeholder="AAPL"
+              />
+              {isCspStrategy && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => screenMut.mutate()}
+                  disabled={screenMut.isPending || !ticker}
+                >
+                  {screenMut.isPending ? "Screening…" : "Screen ticker"}
+                </Button>
+              )}
+            </div>
           </label>
           <label className="space-y-1 text-sm">
             <span className="text-muted-foreground">Contracts</span>
@@ -235,6 +306,8 @@ export function TradeForm() {
           </label>
         </CardContent>
       </Card>
+
+      {cspScreen && <CspScreenPanel screen={cspScreen} onApply={applySuggestedContract} />}
 
       <Card>
         <CardHeader>
@@ -286,7 +359,7 @@ export function TradeForm() {
         <Button onClick={() => analyzeMut.mutate()} disabled={analyzeMut.isPending || !ticker || !expirationDate}>
           {analyzeMut.isPending ? "Analyzing…" : "Run pre-trade analysis"}
         </Button>
-        <Button variant="secondary" onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
+        <Button variant="secondary" onClick={handleSave} disabled={saveMut.isPending}>
           Save without analysis
         </Button>
       </div>

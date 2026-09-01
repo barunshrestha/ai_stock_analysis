@@ -361,6 +361,64 @@ export interface ParseImageResult {
   raw_text_preview?: string;
 }
 
+export interface CspSuggestedContract {
+  strike: number;
+  expiration: string;
+  dte: number;
+  premium_mid: number;
+  delta: number;
+  implied_volatility: number | null;
+  bid: number | null;
+  ask: number | null;
+  spread_pct: number | null;
+  open_interest: number | null;
+  volume: number | null;
+  otm_pct: number | null;
+  liquidity_ok: boolean;
+}
+
+export interface CspScreenResult {
+  ticker: string;
+  overall_verdict: "favorable" | "mixed" | "high_risk";
+  recommendation_color: "green" | "red";
+  sections: Record<string, unknown>;
+  pros: string[];
+  cons: string[];
+  verdict: {
+    recommended_strike: number | null;
+    margin_of_safety_pct: number | null;
+    summary: string;
+  };
+  markdown: string;
+  suggested_contract: CspSuggestedContract | null;
+  disclaimer: string;
+}
+
+export interface CspMonitorResult {
+  ticker: string;
+  strike_price: number;
+  expiration_date: string;
+  initial_premium: number;
+  current_spot: number | null;
+  current_mid: number | null;
+  unrealized_pnl_pct: number | null;
+  trigger_close_alert: boolean;
+  breached: boolean;
+  net_cost_basis: number;
+  recommendation_color: "green" | "red";
+  recommendation: string;
+  markdown: string;
+  disclaimer: string;
+}
+
+export interface CspMonitoringAlert {
+  trade_id: number;
+  ticker: string;
+  trigger_close_alert: boolean;
+  breached: boolean;
+  unrealized_pnl_pct: number | null;
+}
+
 export const api = {
   search: (q: string) =>
     request<{ query: string; results: SearchResult[] }>(
@@ -459,6 +517,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  cspScreen: (ticker: string) =>
+    request<CspScreenResult>(`/api/options/csp/screen`, {
+      method: "POST",
+      body: JSON.stringify({ ticker }),
+    }),
+  cspMonitorTrade: (id: number) => request<CspMonitorResult>(`/api/options/trades/${id}/monitor`),
+  cspMonitoringSummary: () =>
+    request<{ alerts: CspMonitoringAlert[] }>(`/api/options/monitoring/summary`),
   optionsParseText: (text: string, broker?: string) =>
     request<ParseImageResult>(`/api/options/parse-text`, {
       method: "POST",

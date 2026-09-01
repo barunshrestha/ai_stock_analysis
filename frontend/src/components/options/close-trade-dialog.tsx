@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -14,12 +14,26 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 
-export function CloseTradeDialog({ tradeId, onClosed }: { tradeId: number; onClosed?: () => void }) {
+export function CloseTradeDialog({
+  tradeId,
+  onClosed,
+  defaultClosePrice,
+}: {
+  tradeId: number;
+  onClosed?: () => void;
+  defaultClosePrice?: string;
+}) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [closePrice, setClosePrice] = useState("");
   const [assigned, setAssigned] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (defaultClosePrice && open) {
+      setClosePrice(defaultClosePrice);
+    }
+  }, [defaultClosePrice, open]);
 
   const mut = useMutation({
     mutationFn: () =>

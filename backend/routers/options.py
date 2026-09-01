@@ -16,7 +16,9 @@ from backend.schemas.options import (
     ParseTextRequest,
     StrategyType,
 )
+from backend.schemas.csp import CspScreenRequest
 from backend.services import (
+    csp_analysis_service,
     market_context_service,
     options_advisory_service,
     options_image_parser_service,
@@ -40,6 +42,79 @@ def list_strategies():
 @router.get("/market/context")
 def market_context():
     return market_context_service.get_market_context()
+
+
+@router.post("/csp/screen")
+def csp_screen(req: CspScreenRequest):
+    try:
+        return csp_analysis_service.analyze_stock_for_csp(req.ticker).model_dump()
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/trades/{trade_id}/monitor")
+def monitor_trade(trade_id: int, db=Depends(get_db)):
+    trade = db.get_options_trade(trade_id)
+    if not trade:
+        raise HTTPException(status_code=404, detail="Trade not found.")
+    if trade["status"] != "open":
+        raise HTTPException(status_code=422, detail="Monitoring is only for open trades.")
+    if trade["strategy_type"] not in ("cash_secured_put", "short_put"):
+        raise HTTPException(status_code=422, detail="Monitoring supports CSP / short put trades only.")
+
+    from datetime import date as date_cls
+
+    strike = trade["legs"][0]["strike"] if trade.get("legs") else trade["metrics"].get("short_strike")
+    if not strike:
+        raise HTTPException(status_code=422, detail="Trade has no strike on file.")
+    exp = date_cls.fromisoformat(trade["expiration_date"])
+    try:
+        result = csp_analysis_service.monitor_active_csp(
+            trade["ticker"],
+            float(strike),
+            exp,
+            float(trade["net_credit_debit"]),
+        )
+        return result.model_dump()
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/monitoring/summary")
+def monitoring_summary(db=Depends(get_db)):
+    """Alert badges for open CSP trades in the journal."""
+    trades = db.list_options_trades(status="open")
+    alerts = []
+    from datetime import date as date_cls
+
+    for t in trades:
+        if t["strategy_type"] not in ("cash_secured_put", "short_put"):
+            continue
+        strike = t["legs"][0]["strike"] if t.get("legs") else None
+        if not strike:
+            continue
+        try:
+            mon = csp_analysis_service.monitor_active_csp(
+                t["ticker"],
+                float(strike),
+                date_cls.fromisoformat(t["expiration_date"]),
+                float(t["net_credit_debit"]),
+            )
+            if mon.trigger_close_alert or mon.breached:
+                alerts.append(
+                    {
+                        "trade_id": t["id"],
+                        "ticker": t["ticker"],
+                        "trigger_close_alert": mon.trigger_close_alert,
+                        "breached": mon.breached,
+                        "unrealized_pnl_pct": mon.unrealized_pnl_pct,
+                    }
+                )
+        except Exception:
+            continue
+    return {"alerts": alerts}
 
 
 @router.post("/pre-trade/analyze")

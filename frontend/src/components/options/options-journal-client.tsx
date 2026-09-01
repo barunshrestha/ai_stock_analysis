@@ -16,6 +16,13 @@ export function OptionsJournalClient() {
   const openQ = useQuery({ queryKey: ["options-trades", "open"], queryFn: () => api.optionsTrades({ status: "open" }) });
   const closedQ = useQuery({ queryKey: ["options-trades", "closed"], queryFn: () => api.optionsTrades({ status: "closed" }) });
   const assignedQ = useQuery({ queryKey: ["options-trades", "assigned"], queryFn: () => api.optionsTrades({ status: "assigned" }) });
+  const alertsQ = useQuery({
+    queryKey: ["csp-monitoring-summary"],
+    queryFn: () => api.cspMonitoringSummary(),
+    refetchInterval: 60_000,
+  });
+
+  const alertByTrade = new Map((alertsQ.data?.alerts ?? []).map((a) => [a.trade_id, a]));
 
   return (
     <div className="space-y-6">
@@ -41,7 +48,7 @@ export function OptionsJournalClient() {
           <TabsTrigger value="assigned">Assigned</TabsTrigger>
         </TabsList>
         <TabsContent value="open" className="mt-4">
-          <TradeList query={openQ} empty="No open trades." />
+          <TradeList query={openQ} empty="No open trades." alertByTrade={alertByTrade} />
         </TabsContent>
         <TabsContent value="closed" className="mt-4">
           <TradeList query={closedQ} empty="No closed trades." />
@@ -57,9 +64,11 @@ export function OptionsJournalClient() {
 function TradeList({
   query,
   empty,
+  alertByTrade,
 }: {
   query: ReturnType<typeof useQuery<{ trades: import("@/lib/api").OptionTrade[] }>>;
   empty: string;
+  alertByTrade?: Map<number, import("@/lib/api").CspMonitoringAlert>;
 }) {
   if (query.isPending) {
     return (
@@ -79,7 +88,9 @@ function TradeList({
   }
   return (
     <div className="space-y-2">
-      {trades.map((t) => (
+      {trades.map((t) => {
+        const alert = alertByTrade?.get(t.id);
+        return (
         <Link key={t.id} href={`/options/${t.id}`}>
           <Card className="py-0 transition-colors hover:bg-muted/40">
             <CardContent className="flex flex-wrap items-center gap-3 px-4 py-3">
@@ -88,6 +99,12 @@ function TradeList({
               <span className="text-sm text-muted-foreground">
                 {t.contracts}× · ${t.net_credit_debit.toFixed(2)} · exp {t.expiration_date}
               </span>
+              {alert?.trigger_close_alert && (
+                <Badge className="bg-positive/15 text-positive hover:bg-positive/20">50% profit</Badge>
+              )}
+              {alert?.breached && (
+                <Badge variant="destructive">Near strike</Badge>
+              )}
               <span className="ml-auto text-sm">
                 Ann. ROC {t.metrics.annualized_roc_pct.toFixed(1)}%
               </span>
@@ -97,7 +114,8 @@ function TradeList({
             </CardContent>
           </Card>
         </Link>
-      ))}
+        );
+      })}
     </div>
   );
 }

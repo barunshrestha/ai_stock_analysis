@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { ArrowLeft } from "lucide-react";
 
 import { api } from "@/lib/api";
@@ -9,9 +10,11 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AdvisoryPanel } from "@/components/options/advisory-panel";
 import { CloseTradeDialog } from "@/components/options/close-trade-dialog";
+import { CspMonitorPanel } from "@/components/options/csp-monitor-panel";
 import { STRATEGY_LABELS } from "@/components/options/constants";
 
 export function TradeDetailClient({ id }: { id: number }) {
+  const [prefillClosePrice, setPrefillClosePrice] = useState<string | undefined>();
   const { data: trade, isPending, isError, refetch } = useQuery({
     queryKey: ["options-trade", id],
     queryFn: () => api.optionsTrade(id),
@@ -38,7 +41,13 @@ export function TradeDetailClient({ id }: { id: number }) {
           </span>
         </h1>
         <span className="rounded-full border px-2 py-0.5 text-xs uppercase">{trade.status}</span>
-        {trade.status === "open" && <CloseTradeDialog tradeId={trade.id} onClosed={() => refetch()} />}
+        {trade.status === "open" && (
+          <CloseTradeDialog
+            tradeId={trade.id}
+            defaultClosePrice={prefillClosePrice}
+            onClosed={() => refetch()}
+          />
+        )}
         <Button variant="ghost" size="sm" asChild>
           <Link href={`/stocks/${trade.ticker}`}>View stock</Link>
         </Button>
@@ -56,6 +65,15 @@ export function TradeDetailClient({ id }: { id: number }) {
       )}
 
       <AdvisoryPanel trade={trade} />
+
+      {trade.status === "open" &&
+        (trade.strategy_type === "cash_secured_put" || trade.strategy_type === "short_put") && (
+          <CspMonitorPanel
+            tradeId={trade.id}
+            open
+            onCloseAlert={(price) => setPrefillClosePrice(String(price))}
+          />
+        )}
     </div>
   );
 }
