@@ -232,6 +232,135 @@ export interface EconomicEvent {
   previous: number | null;
 }
 
+export type StrategyType =
+  | "cash_secured_put"
+  | "covered_call"
+  | "short_put"
+  | "short_call"
+  | "long_call"
+  | "long_put"
+  | "put_credit_spread"
+  | "call_credit_spread"
+  | "put_debit_spread"
+  | "call_debit_spread"
+  | "iron_condor"
+  | "custom";
+
+export interface OptionLeg {
+  leg_index: number;
+  option_type: "put" | "call";
+  side: "sell_to_open" | "buy_to_close" | "buy_to_open" | "sell_to_close";
+  strike: number;
+  premium_per_contract: number;
+  expiration_date?: string | null;
+}
+
+export interface OptionTradeCreatePayload {
+  strategy_type: StrategyType;
+  ticker: string;
+  legs: OptionLeg[];
+  contracts: number;
+  executed_at: string;
+  expiration_date: string;
+  net_credit_debit: number;
+  collateral_override?: number | null;
+  broker?: string | null;
+  notes?: string | null;
+}
+
+export interface OptionTradeMetrics {
+  collateral_required: number;
+  total_premium_dollars: number;
+  days_to_expiration: number;
+  return_on_capital_pct: number;
+  annualized_roc_pct: number;
+  premium_pct_of_strike?: number;
+  breach_price?: number | null;
+  assignment_cost_basis?: number | null;
+  btc_50pct_target_per_contract?: number | null;
+  max_profit_dollars?: number | null;
+  max_loss_dollars?: number | null;
+  short_strike?: number | null;
+  is_short_premium?: boolean;
+}
+
+export interface OptionTrade {
+  id: number;
+  status: "open" | "closed" | "assigned" | "expired";
+  strategy_type: StrategyType;
+  ticker: string;
+  broker: string | null;
+  executed_at: string;
+  expiration_date: string;
+  contracts: number;
+  net_credit_debit: number;
+  collateral_required: number;
+  collateral_override: number | null;
+  notes: string | null;
+  metrics: OptionTradeMetrics;
+  advisory: Record<string, unknown>;
+  closed_at: string | null;
+  close_net_per_contract: number | null;
+  realized_pnl: number | null;
+  legs: OptionLeg[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PreTradeIndicator {
+  id: string;
+  label: string;
+  value: string;
+  status: "good" | "neutral" | "caution" | "bad";
+  impact: string;
+  annualized?: string | null;
+}
+
+export interface PreTradeAnalysis {
+  overall_score: "favorable" | "mixed" | "high_risk";
+  summary: string;
+  indicators: PreTradeIndicator[];
+  recommendations: string[];
+}
+
+export interface MarketContext {
+  as_of: string;
+  sentiment: {
+    label: string;
+    display: string;
+    vix: number | null;
+    vix_change_pct: number | null;
+    spy_change_pct: number | null;
+    qqq_change_pct: number | null;
+    impact: string;
+  };
+  economic_events: EconomicEvent[];
+  finnhub_configured: boolean;
+  catalysts: {
+    earnings_headlines: NewsItem[];
+    market_headlines: NewsItem[];
+    economy_headlines: NewsItem[];
+  };
+  alerts: { level: string; text: string }[];
+  footer_note: string;
+  disclaimer: string;
+}
+
+export interface ParseImageResult {
+  draft: Partial<OptionTradeCreatePayload> & { broker?: string };
+  detected_strategy: string;
+  strategy_confidence: number;
+  parse_confidence: number;
+  uncertain_fields: string[];
+  trade_type_suggestions: {
+    strategy: string;
+    reason: string;
+    impact: string;
+    recommended_checks: string[];
+  }[];
+  raw_text_preview?: string;
+}
+
 export const api = {
   search: (q: string) =>
     request<{ query: string; results: SearchResult[] }>(
@@ -318,4 +447,61 @@ export const api = {
       finnhub_configured: boolean;
       events: EconomicEvent[];
     }>(`/api/news/calendar?days=${days}`),
+
+  // Options journal
+  optionsStrategies: () =>
+    request<{ strategies: { id: string; label: string; legs: number; short_premium: boolean | null }[] }>(
+      `/api/options/strategies`,
+    ),
+  marketContext: () => request<MarketContext>(`/api/options/market/context`),
+  optionsPreTradeAnalyze: (body: OptionTradeCreatePayload) =>
+    request<PreTradeAnalysis>(`/api/options/pre-trade/analyze`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  optionsParseText: (text: string, broker?: string) =>
+    request<ParseImageResult>(`/api/options/parse-text`, {
+      method: "POST",
+      body: JSON.stringify({ text, broker }),
+    }),
+  optionsParseImage: async (file: File, broker?: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (broker) form.append("broker", broker);
+    const res = await fetch(`${API_BASE}/api/options/parse-image`, {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        const body = await res.json();
+        detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+      } catch {
+        /* keep statusText */
+      }
+      throw new ApiError(res.status, detail);
+    }
+    return res.json() as Promise<ParseImageResult>;
+  },
+  optionsTrades: (params?: { status?: string; ticker?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.status) q.set("status", params.status);
+    if (params?.ticker) q.set("ticker", params.ticker);
+    const qs = q.toString();
+    return request<{ trades: OptionTrade[] }>(`/api/options/trades${qs ? `?${qs}` : ""}`);
+  },
+  optionsTrade: (id: number) => request<OptionTrade>(`/api/options/trades/${id}`),
+  optionsCreateTrade: (body: OptionTradeCreatePayload) =>
+    request<OptionTrade>(`/api/options/trades`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  optionsCloseTrade: (id: number, body: { closed_at: string; close_net_per_contract: number; assigned?: boolean }) =>
+    request<OptionTrade>(`/api/options/trades/${id}/close`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  optionsDeleteTrade: (id: number) =>
+    request<{ deleted: boolean; id: number }>(`/api/options/trades/${id}`, { method: "DELETE" }),
 };

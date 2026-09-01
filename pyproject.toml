@@ -16,8 +16,9 @@ dependencies = [
     "streamlit>=1.45.1",
     "uvicorn>=0.30.0",
     "yfinance>=1.3.0",
+    "pillow>=10.0.0",
 ]
-# AI uses Ollama (local, no extra dependencies)
+# Optional OCR: pip install pytesseract + install Tesseract binary on the host
 
 [tool.setuptools]
 py-modules = ["app", "database", "formatting_utils", "scanner", "yahoo_session"]

@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import CORS_ORIGINS
-from backend.routers import admin, ai, automation, dca, news, portfolio, search, stocks
+from backend.routers import admin, ai, automation, dca, news, options, portfolio, search, stocks
 
 app = FastAPI(
     title="AI Stock Analysis API",
@@ -37,6 +37,7 @@ app.include_router(stocks.router)
 app.include_router(portfolio.router)
 app.include_router(dca.router)
 app.include_router(ai.router)
+app.include_router(options.router)
 app.include_router(automation.router)
 app.include_router(admin.router)
 

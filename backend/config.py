@@ -32,8 +32,17 @@ TTL_SEARCH = 60 * 60
 TTL_NEWS = 15 * 60
 TTL_NEWS_PORTFOLIO = 5 * 60
 TTL_NEWS_CALENDAR = 60 * 60
+TTL_MARKET_CONTEXT = 5 * 60
 
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
+
+# Pre-trade analysis thresholds
+PRETRADE_DTE_GOOD_MIN = int(os.getenv("PRETRADE_DTE_GOOD_MIN", "30"))
+PRETRADE_DTE_GOOD_MAX = int(os.getenv("PRETRADE_DTE_GOOD_MAX", "45"))
+PRETRADE_DTE_CAUTION = int(os.getenv("PRETRADE_DTE_CAUTION", "14"))
+PRETRADE_ANNUALIZED_ROC_GOOD = float(os.getenv("PRETRADE_ANNUALIZED_ROC_GOOD", "20"))
+PRETRADE_OTM_PCT_GOOD = float(os.getenv("PRETRADE_OTM_PCT_GOOD", "5"))
+PRETRADE_OTM_PCT_CAUTION = float(os.getenv("PRETRADE_OTM_PCT_CAUTION", "2"))
 
 # RSS feeds grouped by dashboard category. Add URLs here without code changes.
 NEWS_RSS_FEEDS: dict[str, list[tuple[str, str]]] = {
