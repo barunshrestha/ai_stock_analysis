@@ -21,6 +21,21 @@ function sentimentColor(label: string) {
   return "text-muted-foreground";
 }
 
+/** Merge headline feeds without duplicate ids (same story can appear in multiple categories). */
+function uniqueHeadlines<T extends { id: string }>(lists: T[][], limit: number): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const list of lists) {
+    for (const item of list) {
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      out.push(item);
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
+}
+
 export function MarketContextRail() {
   const { data, isPending, isError } = useQuery({
     queryKey: ["market-context"],
@@ -132,9 +147,10 @@ export function MarketContextRail() {
           <CardTitle className="text-sm font-semibold">Catalysts</CardTitle>
         </CardHeader>
         <CardContent className="max-h-56 space-y-2 overflow-y-auto">
-          {[...data.catalysts.earnings_headlines, ...data.catalysts.market_headlines]
-            .slice(0, 8)
-            .map((item) => (
+          {uniqueHeadlines(
+            [data.catalysts.earnings_headlines, data.catalysts.market_headlines],
+            8,
+          ).map((item) => (
               <a
                 key={item.id}
                 href={item.url}
