@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 
 import type {
   CspScreenResult,
+  OptionTrade,
   OptionTradeCreatePayload,
   OptionLeg,
   StrategyType,
@@ -44,21 +45,45 @@ function buildLegs(strategy: StrategyType): OptionLeg[] {
   return Array.from({ length: n }, (_, i) => defaultLeg(i + 1, strategy));
 }
 
-export function TradeForm() {
+function initialStateFromTrade(trade: OptionTrade) {
+  return {
+    strategy: trade.strategy_type,
+    ticker: trade.ticker,
+    legs: trade.legs.length ? trade.legs : buildLegs(trade.strategy_type),
+    contracts: trade.contracts,
+    executedAt: trade.executed_at.slice(0, 16),
+    expirationDate: trade.expiration_date.slice(0, 10),
+    netCreditDebit: String(trade.net_credit_debit),
+    collateralOverride: trade.collateral_override != null ? String(trade.collateral_override) : "",
+    notes: trade.notes ?? "",
+    broker: trade.broker ?? "",
+  };
+}
+
+export function TradeForm({
+  tradeId,
+  initialTrade,
+}: {
+  tradeId?: number;
+  initialTrade?: OptionTrade;
+}) {
+  const isEdit = tradeId != null && initialTrade != null;
+  const seeded = isEdit ? initialStateFromTrade(initialTrade) : null;
+
   const router = useRouter();
   const today = new Date().toISOString().slice(0, 10);
   const nowLocal = new Date().toISOString().slice(0, 16);
 
-  const [strategy, setStrategy] = useState<StrategyType>("cash_secured_put");
-  const [ticker, setTicker] = useState("");
-  const [legs, setLegs] = useState<OptionLeg[]>(() => buildLegs("cash_secured_put"));
-  const [contracts, setContracts] = useState(1);
-  const [executedAt, setExecutedAt] = useState(nowLocal);
-  const [expirationDate, setExpirationDate] = useState("");
-  const [netCreditDebit, setNetCreditDebit] = useState("");
-  const [collateralOverride, setCollateralOverride] = useState("");
-  const [notes, setNotes] = useState("");
-  const [broker, setBroker] = useState("");
+  const [strategy, setStrategy] = useState<StrategyType>(seeded?.strategy ?? "cash_secured_put");
+  const [ticker, setTicker] = useState(seeded?.ticker ?? "");
+  const [legs, setLegs] = useState<OptionLeg[]>(() => seeded?.legs ?? buildLegs("cash_secured_put"));
+  const [contracts, setContracts] = useState(seeded?.contracts ?? 1);
+  const [executedAt, setExecutedAt] = useState(seeded?.executedAt ?? nowLocal);
+  const [expirationDate, setExpirationDate] = useState(seeded?.expirationDate ?? "");
+  const [netCreditDebit, setNetCreditDebit] = useState(seeded?.netCreditDebit ?? "");
+  const [collateralOverride, setCollateralOverride] = useState(seeded?.collateralOverride ?? "");
+  const [notes, setNotes] = useState(seeded?.notes ?? "");
+  const [broker, setBroker] = useState(seeded?.broker ?? "");
   const [preTrade, setPreTrade] = useState<PreTradeAnalysis | null>(null);
   const [cspScreen, setCspScreen] = useState<CspScreenResult | null>(null);
   const [parseInfo, setParseInfo] = useState<ParseImageResult | null>(null);
@@ -140,9 +165,12 @@ export function TradeForm() {
   });
 
   const saveMut = useMutation({
-    mutationFn: () => api.optionsCreateTrade(payload()),
+    mutationFn: () =>
+      isEdit
+        ? api.optionsUpdateTrade(tradeId, payload())
+        : api.optionsCreateTrade(payload()),
     onSuccess: (trade) => router.push(`/options/${trade.id}`),
-    onError: (e: Error) => setError(e instanceof ApiError ? e.message : "Save failed"),
+    onError: (e: Error) => setError(e instanceof ApiError ? e.message : isEdit ? "Update failed" : "Save failed"),
   });
 
   const parseImageMut = useMutation({
@@ -180,7 +208,7 @@ export function TradeForm() {
             Adjust trade
           </Button>
           <Button onClick={handleSave} disabled={saveMut.isPending}>
-            {saveMut.isPending ? "Saving…" : "Save trade"}
+            {saveMut.isPending ? "Saving…" : isEdit ? "Update trade" : "Save trade"}
           </Button>
         </div>
         {error && <p className="text-sm text-destructive">{error}</p>}
@@ -190,11 +218,14 @@ export function TradeForm() {
 
   return (
     <Tabs defaultValue="manual" className="space-y-4">
-      <TabsList>
-        <TabsTrigger value="manual">Manual entry</TabsTrigger>
-        <TabsTrigger value="upload">Upload screenshot</TabsTrigger>
-      </TabsList>
+      {!isEdit && (
+        <TabsList>
+          <TabsTrigger value="manual">Manual entry</TabsTrigger>
+          <TabsTrigger value="upload">Upload screenshot</TabsTrigger>
+        </TabsList>
+      )}
 
+      {!isEdit && (
       <TabsContent value="upload" className="space-y-4">
         <Card>
           <CardHeader>
@@ -234,8 +265,9 @@ export function TradeForm() {
           </CardContent>
         </Card>
       </TabsContent>
+      )}
 
-      <TabsContent value="manual" />
+      {!isEdit && <TabsContent value="manual" />}
 
       <Card>
         <CardHeader>
@@ -263,6 +295,8 @@ export function TradeForm() {
                 value={ticker}
                 onChange={(e) => setTicker(e.target.value.toUpperCase())}
                 placeholder="AAPL"
+                readOnly={isEdit}
+                className={isEdit ? "bg-muted" : undefined}
               />
               {isCspStrategy && (
                 <Button
@@ -360,7 +394,7 @@ export function TradeForm() {
           {analyzeMut.isPending ? "Analyzing…" : "Run pre-trade analysis"}
         </Button>
         <Button variant="secondary" onClick={handleSave} disabled={saveMut.isPending}>
-          Save without analysis
+          {isEdit ? "Update without analysis" : "Save without analysis"}
         </Button>
       </div>
       {error && <p className="text-sm text-destructive">{error}</p>}

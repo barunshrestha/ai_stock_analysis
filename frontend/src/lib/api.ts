@@ -284,6 +284,8 @@ export interface OptionTradeMetrics {
   is_short_premium?: boolean;
 }
 
+export type OptionTradeUpdatePayload = Partial<Omit<OptionTradeCreatePayload, "ticker">>;
+
 export interface OptionTrade {
   id: number;
   status: "open" | "closed" | "assigned" | "expired";
@@ -561,6 +563,11 @@ export const api = {
   optionsCreateTrade: (body: OptionTradeCreatePayload) =>
     request<OptionTrade>(`/api/options/trades`, {
       method: "POST",
+      body: JSON.stringify(body),
+    }),
+  optionsUpdateTrade: (id: number, body: OptionTradeUpdatePayload) =>
+    request<OptionTrade>(`/api/options/trades/${id}`, {
+      method: "PATCH",
       body: JSON.stringify(body),
     }),
   optionsCloseTrade: (id: number, body: { closed_at: string; close_net_per_contract: number; assigned?: boolean }) =>

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Pencil } from "lucide-react";
 
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { AdvisoryPanel } from "@/components/options/advisory-panel";
 import { CloseTradeDialog } from "@/components/options/close-trade-dialog";
 import { CspMonitorPanel } from "@/components/options/csp-monitor-panel";
+import { DeleteTradeDialog } from "@/components/options/delete-trade-dialog";
 import { STRATEGY_LABELS } from "@/components/options/constants";
 
 export function TradeDetailClient({ id }: { id: number }) {
@@ -48,6 +49,24 @@ export function TradeDetailClient({ id }: { id: number }) {
             onClosed={() => refetch()}
           />
         )}
+        {trade.status === "open" && (
+          <Button variant="outline" size="sm" asChild>
+            <Link href={`/options/${trade.id}/edit`}>
+              <Pencil className="mr-1 size-4" />
+              Edit
+            </Link>
+          </Button>
+        )}
+        <DeleteTradeDialog
+          tradeId={trade.id}
+          ticker={trade.ticker}
+          redirectToJournal
+          trigger={
+            <Button variant="outline" size="sm" className="text-destructive hover:text-destructive">
+              Delete
+            </Button>
+          }
+        />
         <Button variant="ghost" size="sm" asChild>
           <Link href={`/stocks/${trade.ticker}`}>View stock</Link>
         </Button>

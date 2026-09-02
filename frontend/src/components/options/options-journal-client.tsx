@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { Pencil, Plus } from "lucide-react";
 
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { DeleteTradeDialog } from "@/components/options/delete-trade-dialog";
 import { STRATEGY_LABELS } from "@/components/options/constants";
 
 export function OptionsJournalClient() {
@@ -91,29 +92,46 @@ function TradeList({
       {trades.map((t) => {
         const alert = alertByTrade?.get(t.id);
         return (
-        <Link key={t.id} href={`/options/${t.id}`}>
-          <Card className="py-0 transition-colors hover:bg-muted/40">
-            <CardContent className="flex flex-wrap items-center gap-3 px-4 py-3">
-              <span className="font-mono text-lg font-semibold">{t.ticker}</span>
-              <Badge variant="outline">{STRATEGY_LABELS[t.strategy_type]}</Badge>
-              <span className="text-sm text-muted-foreground">
-                {t.contracts}× · ${t.net_credit_debit.toFixed(2)} · exp {t.expiration_date}
-              </span>
-              {alert?.trigger_close_alert && (
-                <Badge className="bg-positive/15 text-positive hover:bg-positive/20">50% profit</Badge>
-              )}
-              {alert?.breached && (
-                <Badge variant="destructive">Near strike</Badge>
-              )}
-              <span className="ml-auto text-sm">
-                Ann. ROC {t.metrics.annualized_roc_pct.toFixed(1)}%
-              </span>
-              {t.realized_pnl != null && (
-                <span className="text-sm font-medium">P&L ${t.realized_pnl.toFixed(2)}</span>
-              )}
+          <Card key={t.id} className="py-0 transition-colors hover:bg-muted/40">
+            <CardContent className="flex items-center gap-2 px-4 py-3">
+              <Link href={`/options/${t.id}`} className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+                <span className="font-mono text-lg font-semibold">{t.ticker}</span>
+                <Badge variant="outline">{STRATEGY_LABELS[t.strategy_type]}</Badge>
+                <span className="text-sm text-muted-foreground">
+                  {t.contracts}× · ${t.net_credit_debit.toFixed(2)} · exp {t.expiration_date}
+                </span>
+                {alert?.trigger_close_alert && (
+                  <Badge className="bg-positive/15 text-positive hover:bg-positive/20">50% profit</Badge>
+                )}
+                {alert?.breached && (
+                  <Badge variant="destructive">Near strike</Badge>
+                )}
+                <span className="ml-auto text-sm sm:ml-0">
+                  Ann. ROC {t.metrics.annualized_roc_pct.toFixed(1)}%
+                </span>
+                {t.realized_pnl != null && (
+                  <span className="text-sm font-medium">P&L ${t.realized_pnl.toFixed(2)}</span>
+                )}
+              </Link>
+              <div className="flex shrink-0 items-center gap-0.5">
+                {t.status === "open" && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 shrink-0"
+                    asChild
+                    aria-label={`Edit ${t.ticker} trade`}
+                  >
+                    <Link href={`/options/${t.id}/edit`}>
+                      <Pencil className="size-4" />
+                    </Link>
+                  </Button>
+                )}
+                <DeleteTradeDialog tradeId={t.id} ticker={t.ticker} />
+              </div>
             </CardContent>
           </Card>
-        </Link>
         );
       })}
     </div>
