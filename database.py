@@ -89,13 +89,27 @@ class CashFlowStatement(Base):
     value = Column(Float)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class PortfolioBucket(Base):
+    """Named portfolio container (user can have multiple)."""
+    __tablename__ = 'portfolio_buckets'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False, unique=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    holdings = relationship('Portfolio', back_populates='bucket', cascade='all, delete-orphan')
+
+
 class Portfolio(Base):
     __tablename__ = 'portfolio'
-    
+    __table_args__ = (UniqueConstraint('portfolio_id', 'symbol', name='uq_portfolio_bucket_symbol'),)
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    symbol = Column(String(10), nullable=False, unique=True)
+    portfolio_id = Column(Integer, ForeignKey('portfolio_buckets.id', ondelete='CASCADE'), nullable=False)
+    symbol = Column(String(10), nullable=False)
     added_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    bucket = relationship('PortfolioBucket', back_populates='holdings')
 
 
 class StockIndustry(Base):
@@ -168,10 +182,61 @@ class DatabaseManager:
         """Create all database tables"""
         try:
             Base.metadata.create_all(bind=self.engine)
+            self._migrate_portfolio_buckets()
             logger.info("Database tables created successfully")
         except Exception as e:
             logger.error(f"Error creating database tables: {e}")
             raise
+
+    def _migrate_portfolio_buckets(self):
+        """Upgrade legacy single-portfolio schema to named portfolio buckets."""
+        from sqlalchemy import inspect, text
+
+        insp = inspect(self.engine)
+        if 'portfolio' not in insp.get_table_names():
+            return
+
+        cols = {c['name'] for c in insp.get_columns('portfolio')}
+        if 'portfolio_id' in cols:
+            return
+
+        logger.info("Migrating portfolio table to multi-portfolio schema…")
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS portfolio_buckets (
+                        id SERIAL PRIMARY KEY,
+                        name VARCHAR(100) NOT NULL UNIQUE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    )
+                    """
+                )
+            )
+            conn.execute(text("INSERT INTO portfolio_buckets (name) VALUES ('My Portfolio')"))
+            conn.execute(text("ALTER TABLE portfolio ADD COLUMN portfolio_id INTEGER"))
+            conn.execute(text("UPDATE portfolio SET portfolio_id = 1 WHERE portfolio_id IS NULL"))
+            conn.execute(text("ALTER TABLE portfolio ALTER COLUMN portfolio_id SET NOT NULL"))
+            conn.execute(
+                text(
+                    """
+                    ALTER TABLE portfolio
+                    ADD CONSTRAINT fk_portfolio_bucket
+                    FOREIGN KEY (portfolio_id) REFERENCES portfolio_buckets(id) ON DELETE CASCADE
+                    """
+                )
+            )
+            conn.execute(text("ALTER TABLE portfolio DROP CONSTRAINT IF EXISTS portfolio_symbol_key"))
+            conn.execute(
+                text(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_portfolio_bucket_symbol
+                    ON portfolio (portfolio_id, symbol)
+                    """
+                )
+            )
+        logger.info("Portfolio migration complete")
     
     def get_session(self):
         """Get a database session"""
@@ -788,21 +853,100 @@ class DatabaseManager:
         finally:
             session.close()
     
-    def add_to_portfolio(self, symbol):
-        """Add a stock symbol to the portfolio"""
+    def ensure_default_portfolio(self) -> int:
+        """Return default portfolio bucket id, creating 'My Portfolio' if needed."""
         session = self.get_session()
         try:
-            # Check if symbol already exists
-            existing = session.query(Portfolio).filter(Portfolio.symbol == symbol).first()
+            bucket = session.query(PortfolioBucket).order_by(PortfolioBucket.id).first()
+            if bucket:
+                return bucket.id
+            bucket = PortfolioBucket(name='My Portfolio')
+            session.add(bucket)
+            session.commit()
+            session.refresh(bucket)
+            return bucket.id
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error ensuring default portfolio: {e}")
+            return 1
+        finally:
+            session.close()
+
+    def list_portfolio_buckets(self) -> list[dict]:
+        session = self.get_session()
+        try:
+            buckets = session.query(PortfolioBucket).order_by(PortfolioBucket.created_at).all()
+            out = []
+            for b in buckets:
+                count = session.query(Portfolio).filter(Portfolio.portfolio_id == b.id).count()
+                out.append(
+                    {
+                        'id': b.id,
+                        'name': b.name,
+                        'symbol_count': count,
+                        'created_at': b.created_at.isoformat() if b.created_at else None,
+                    }
+                )
+            return out
+        except Exception as e:
+            logger.error(f"Error listing portfolios: {e}")
+            return []
+        finally:
+            session.close()
+
+    def create_portfolio_bucket(self, name: str) -> dict | None:
+        session = self.get_session()
+        try:
+            clean = name.strip()
+            if not clean:
+                return None
+            existing = session.query(PortfolioBucket).filter(PortfolioBucket.name == clean).first()
             if existing:
-                logger.info(f"{symbol} already exists in portfolio")
+                return None
+            bucket = PortfolioBucket(name=clean)
+            session.add(bucket)
+            session.commit()
+            session.refresh(bucket)
+            return {'id': bucket.id, 'name': bucket.name, 'symbol_count': 0}
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error creating portfolio '{name}': {e}")
+            return None
+        finally:
+            session.close()
+
+    def get_portfolio_bucket(self, portfolio_id: int) -> dict | None:
+        session = self.get_session()
+        try:
+            bucket = session.query(PortfolioBucket).filter(PortfolioBucket.id == portfolio_id).first()
+            if not bucket:
+                return None
+            count = session.query(Portfolio).filter(Portfolio.portfolio_id == portfolio_id).count()
+            return {'id': bucket.id, 'name': bucket.name, 'symbol_count': count}
+        except Exception as e:
+            logger.error(f"Error fetching portfolio bucket {portfolio_id}: {e}")
+            return None
+        finally:
+            session.close()
+
+    def add_to_portfolio(self, symbol, portfolio_id: int | None = None):
+        """Add a stock symbol to a portfolio bucket"""
+        portfolio_id = portfolio_id or self.ensure_default_portfolio()
+        session = self.get_session()
+        try:
+            existing = (
+                session.query(Portfolio)
+                .filter(Portfolio.portfolio_id == portfolio_id, Portfolio.symbol == symbol)
+                .first()
+            )
+            if existing:
+                logger.info(f"{symbol} already exists in portfolio {portfolio_id}")
                 return True
-            
-            # Add new symbol
-            portfolio_item = Portfolio(symbol=symbol)
+
+            portfolio_item = Portfolio(portfolio_id=portfolio_id, symbol=symbol)
             session.add(portfolio_item)
             session.commit()
-            logger.info(f"Added {symbol} to portfolio")
+            logger.info(f"Added {symbol} to portfolio {portfolio_id}")
             return True
         except Exception as e:
             session.rollback()
@@ -810,50 +954,71 @@ class DatabaseManager:
             return False
         finally:
             session.close()
-    
-    def remove_from_portfolio(self, symbol):
-        """Remove a stock symbol from the portfolio"""
+
+    def remove_from_portfolio(self, symbol, portfolio_id: int | None = None):
+        """Remove a stock symbol from a portfolio bucket"""
+        portfolio_id = portfolio_id or self.ensure_default_portfolio()
         session = self.get_session()
         try:
-            session.query(Portfolio).filter(Portfolio.symbol == symbol).delete()
+            deleted = (
+                session.query(Portfolio)
+                .filter(Portfolio.portfolio_id == portfolio_id, Portfolio.symbol == symbol)
+                .delete()
+            )
             session.commit()
-            logger.info(f"Removed {symbol} from portfolio")
-            return True
+            if deleted:
+                logger.info(f"Removed {symbol} from portfolio {portfolio_id}")
+                return True
+            return False
         except Exception as e:
             session.rollback()
             logger.error(f"Error removing {symbol} from portfolio: {e}")
             return False
         finally:
             session.close()
-    
-    def get_portfolio(self):
-        """Retrieve all stock symbols in the portfolio"""
+
+    def get_portfolio(self, portfolio_id: int | None = None):
+        """Retrieve all stock symbols in a portfolio bucket"""
+        portfolio_id = portfolio_id or self.ensure_default_portfolio()
         session = self.get_session()
         try:
-            records = session.query(Portfolio).order_by(Portfolio.added_at).all()
+            records = (
+                session.query(Portfolio)
+                .filter(Portfolio.portfolio_id == portfolio_id)
+                .order_by(Portfolio.added_at)
+                .all()
+            )
             symbols = [record.symbol for record in records]
-            logger.info(f"Retrieved {len(symbols)} symbols from portfolio")
+            logger.info(f"Retrieved {len(symbols)} symbols from portfolio {portfolio_id}")
             return symbols
         except Exception as e:
             logger.error(f"Error retrieving portfolio: {e}")
             return []
         finally:
             session.close()
-    
-    def save_portfolio(self, symbols):
-        """Replace entire portfolio with new list of symbols"""
+
+    def get_all_portfolio_symbols(self) -> list[str]:
+        """All unique symbols across every portfolio bucket."""
         session = self.get_session()
         try:
-            # Clear existing portfolio
-            session.query(Portfolio).delete()
-            
-            # Add all symbols
+            rows = session.query(Portfolio.symbol).distinct().order_by(Portfolio.symbol).all()
+            return [r[0] for r in rows]
+        except Exception as e:
+            logger.error(f"Error retrieving all portfolio symbols: {e}")
+            return []
+        finally:
+            session.close()
+
+    def save_portfolio(self, symbols, portfolio_id: int | None = None):
+        """Replace holdings in a portfolio bucket"""
+        portfolio_id = portfolio_id or self.ensure_default_portfolio()
+        session = self.get_session()
+        try:
+            session.query(Portfolio).filter(Portfolio.portfolio_id == portfolio_id).delete()
             for symbol in symbols:
-                portfolio_item = Portfolio(symbol=symbol)
-                session.add(portfolio_item)
-            
+                session.add(Portfolio(portfolio_id=portfolio_id, symbol=symbol))
             session.commit()
-            logger.info(f"Saved portfolio with {len(symbols)} symbols")
+            logger.info(f"Saved portfolio {portfolio_id} with {len(symbols)} symbols")
             return True
         except Exception as e:
             session.rollback()

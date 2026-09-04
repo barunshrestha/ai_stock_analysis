@@ -155,9 +155,32 @@ export interface PortfolioGridRow {
   sparkline: number[];
 }
 
+export interface PortfolioBucket {
+  id: number;
+  name: string;
+  symbol_count: number;
+  created_at?: string | null;
+}
+
 export interface PortfolioGridResponse {
+  portfolio_id?: number;
+  name?: string;
   rows: PortfolioGridRow[];
   errors: Record<string, string>;
+}
+
+export interface PortfolioImportRow {
+  symbol: string;
+  status: "added" | "skipped" | "error";
+  message: string;
+}
+
+export interface PortfolioImportResult {
+  total: number;
+  added: number;
+  skipped: number;
+  failed: number;
+  results: PortfolioImportRow[];
 }
 
 export interface IndustryGridResponse extends PortfolioGridResponse {
@@ -165,7 +188,7 @@ export interface IndustryGridResponse extends PortfolioGridResponse {
 }
 
 export type PortfolioView =
-  | { mode: "portfolio" }
+  | { mode: "portfolio"; portfolioId: number; name: string }
   | { mode: "industry"; industry: string };
 
 export interface TrendContext {
@@ -445,16 +468,53 @@ export const api = {
     ),
   stockTrend: (symbol: string) =>
     request<TrendContext>(`/api/stocks/${symbol}/trend`),
-  portfolio: () => request<{ symbols: string[] }>(`/api/portfolio`),
-  portfolioGrid: () => request<PortfolioGridResponse>(`/api/portfolio/grid`),
+  portfolio: (portfolioId?: number) => {
+    const qs = portfolioId ? `?portfolio_id=${portfolioId}` : "";
+    return request<{ portfolio_id: number; name: string; symbols: string[] }>(`/api/portfolio${qs}`);
+  },
+  listPortfolios: () =>
+    request<{ portfolios: PortfolioBucket[] }>(`/api/portfolio/portfolios`),
+  createPortfolio: (name: string) =>
+    request<PortfolioBucket>(`/api/portfolio/portfolios`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  portfolioGrid: (portfolioId?: number) => {
+    const qs = portfolioId ? `?portfolio_id=${portfolioId}` : "";
+    return request<PortfolioGridResponse>(`/api/portfolio/grid${qs}`);
+  },
   industryGrid: (industry: string) =>
     request<IndustryGridResponse>(
       `/api/admin/industries/${encodeURIComponent(industry)}/grid`,
     ),
-  addToPortfolio: (symbol: string) =>
-    request(`/api/portfolio/${symbol}`, { method: "POST" }),
-  removeFromPortfolio: (symbol: string) =>
-    request(`/api/portfolio/${symbol}`, { method: "DELETE" }),
+  addToPortfolio: (symbol: string, portfolioId?: number) =>
+    request(`/api/portfolio/${symbol}${portfolioId ? `?portfolio_id=${portfolioId}` : ""}`, {
+      method: "POST",
+    }),
+  importPortfolioCsv: async (file: File, portfolioId?: number) => {
+    const form = new FormData();
+    form.append("file", file);
+    const qs = portfolioId ? `?portfolio_id=${portfolioId}` : "";
+    const res = await fetch(`${API_BASE}/api/portfolio/import-csv${qs}`, {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        const body = await res.json();
+        detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+      } catch {
+        /* keep statusText */
+      }
+      throw new ApiError(res.status, detail);
+    }
+    return res.json() as Promise<PortfolioImportResult>;
+  },
+  removeFromPortfolio: (symbol: string, portfolioId?: number) =>
+    request(`/api/portfolio/${symbol}${portfolioId ? `?portfolio_id=${portfolioId}` : ""}`, {
+      method: "DELETE",
+    }),
   automationScan: (symbol: string) =>
     request<AutomationResponse>(`/api/automation/${symbol}`),
   aiPoints: () =>

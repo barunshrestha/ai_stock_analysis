@@ -25,7 +25,7 @@ function useDebounced<T>(value: T, delayMs: number): T {
 }
 
 /** Autosuggest dialog that adds the selected symbol to the portfolio. */
-export function AddStockDialog() {
+export function AddStockDialog({ portfolioId }: { portfolioId?: number }) {
   const queryClient = useQueryClient();
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
@@ -39,9 +39,10 @@ export function AddStockDialog() {
   });
 
   const addMutation = useMutation({
-    mutationFn: (symbol: string) => api.addToPortfolio(symbol),
+    mutationFn: (symbol: string) => api.addToPortfolio(symbol, portfolioId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+      queryClient.invalidateQueries({ queryKey: ["portfolios"] });
       setOpen(false);
       setQuery("");
     },

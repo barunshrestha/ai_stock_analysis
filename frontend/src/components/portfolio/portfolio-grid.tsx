@@ -39,6 +39,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { AddStockDialog } from "@/components/portfolio/add-stock-dialog";
+import { ImportCsvDialog } from "@/components/portfolio/import-csv-dialog";
 import { Sparkline } from "@/components/portfolio/sparkline";
 
 type Formatter = "price" | "pct" | "signedPct" | "compact" | "number";
@@ -224,19 +225,24 @@ export function PortfolioGrid({ view }: PortfolioGridProps) {
   const [tab, setTab] = React.useState("performance");
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const isPortfolio = view.mode === "portfolio";
+  const portfolioId = isPortfolio ? view.portfolioId : undefined;
 
   const { data, isPending, isError, error } = useQuery({
     queryKey: isPortfolio
-      ? ["portfolio", "grid"]
-      : ["industry", "grid", view.industry],
+      ? ["portfolio", "grid", portfolioId]
+      : ["industry", "grid", view.mode === "industry" ? view.industry : ""],
     queryFn: () =>
-      isPortfolio ? api.portfolioGrid() : api.industryGrid(view.industry),
+      isPortfolio && portfolioId
+        ? api.portfolioGrid(portfolioId)
+        : api.industryGrid(view.mode === "industry" ? view.industry : ""),
   });
 
   const removeMutation = useMutation({
-    mutationFn: (symbol: string) => api.removeFromPortfolio(symbol),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["portfolio"] }),
+    mutationFn: (symbol: string) => api.removeFromPortfolio(symbol, portfolioId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+      queryClient.invalidateQueries({ queryKey: ["portfolios"] });
+    },
   });
 
   const onRemove = React.useCallback(
@@ -251,8 +257,8 @@ export function PortfolioGrid({ view }: PortfolioGridProps) {
   const rows = React.useMemo(() => data?.rows ?? [], [data]);
 
   const csvPrefix = isPortfolio
-    ? "portfolio"
-    : `industry-${view.industry.replaceAll(/[^a-zA-Z0-9_-]+/g, "-")}`;
+    ? `portfolio-${portfolioId ?? "default"}`
+    : `industry-${view.mode === "industry" ? view.industry.replaceAll(/[^a-zA-Z0-9_-]+/g, "-") : "unknown"}`;
 
   const table = useReactTable({
     data: rows,
@@ -306,7 +312,12 @@ export function PortfolioGrid({ view }: PortfolioGridProps) {
             <Download className="size-4" />
             CSV
           </Button>
-          {isPortfolio && <AddStockDialog />}
+          {isPortfolio && portfolioId != null && (
+            <>
+              <ImportCsvDialog portfolioId={portfolioId} />
+              <AddStockDialog portfolioId={portfolioId} />
+            </>
+          )}
         </div>
       </div>
 
@@ -321,9 +332,16 @@ export function PortfolioGrid({ view }: PortfolioGridProps) {
           {isPortfolio ? (
             <>
               <p className="text-sm text-muted-foreground">
-                Your portfolio is empty. Add a stock to start tracking it.
+                Your portfolio is empty. Add a stock or import from CSV to start tracking.
               </p>
-              <AddStockDialog />
+              <div className="flex flex-wrap justify-center gap-2">
+                {portfolioId != null && (
+                  <>
+                    <ImportCsvDialog portfolioId={portfolioId} />
+                    <AddStockDialog portfolioId={portfolioId} />
+                  </>
+                )}
+              </div>
             </>
           ) : (
             <p className="text-sm text-muted-foreground">
