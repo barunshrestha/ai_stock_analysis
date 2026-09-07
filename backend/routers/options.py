@@ -16,7 +16,7 @@ from backend.schemas.options import (
     ParseTextRequest,
     StrategyType,
 )
-from backend.schemas.csp import CspScreenRequest
+from backend.schemas.csp import CspScreenRequest, TickerNoteUpsert
 from backend.services import (
     csp_analysis_service,
     market_context_service,
@@ -44,10 +44,37 @@ def market_context():
     return market_context_service.get_market_context()
 
 
+@router.get("/ticker-notes/{ticker}")
+def get_ticker_note(
+    ticker: str,
+    note_key: str = Query("liquidity", min_length=1, max_length=40),
+    db=Depends(get_db),
+):
+    note = db.get_ticker_analysis_note(ticker, note_key)
+    if not note:
+        return {"ticker": ticker.strip().upper(), "note_key": note_key, "content": "", "updated_at": None}
+    return note
+
+
+@router.put("/ticker-notes/{ticker}")
+def upsert_ticker_note(
+    ticker: str,
+    body: TickerNoteUpsert,
+    note_key: str = Query("liquidity", min_length=1, max_length=40),
+    db=Depends(get_db),
+):
+    saved = db.upsert_ticker_analysis_note(ticker, note_key, body.content)
+    if not saved:
+        raise HTTPException(status_code=500, detail="Could not save note.")
+    return saved
+
+
 @router.post("/csp/screen")
 def csp_screen(req: CspScreenRequest):
     try:
-        return csp_analysis_service.analyze_stock_for_csp(req.ticker).model_dump()
+        return csp_analysis_service.analyze_stock_for_strategy(
+            req.ticker, req.strategy or "cash_secured_put"
+        ).model_dump()
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:

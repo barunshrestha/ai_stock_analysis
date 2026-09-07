@@ -11,7 +11,7 @@ from backend.services.csp_analysis_service import (
     compute_trigger_close_alert,
     compute_unrealized_pnl_pct,
 )
-from backend.services.options_chain_service import find_put_near_delta
+from backend.services.options_chain_service import find_option_near_delta, find_put_near_delta
 
 
 class TestMonitorMath:
@@ -54,3 +54,20 @@ class TestDeltaPicker:
 
     def test_empty_chain_returns_none(self):
         assert find_put_near_delta(pd.DataFrame(), spot=100.0, expiration_date=date.today()) is None
+
+    def test_picks_call_near_delta(self):
+        chain = pd.DataFrame(
+            [
+                {"strike": 100.0, "bid": 4.0, "ask": 4.2, "impliedVolatility": 0.3},
+                {"strike": 105.0, "bid": 2.0, "ask": 2.2, "impliedVolatility": 0.3},
+                {"strike": 110.0, "bid": 1.0, "ask": 1.2, "impliedVolatility": 0.3},
+            ]
+        )
+        exp = date.today() + timedelta(days=35)
+        result = find_option_near_delta(
+            chain, spot=100.0, expiration_date=exp, option_type="call", target_delta=0.30
+        )
+        assert result is not None
+        assert result["option_type"] == "call"
+        assert result["strike"] in (100.0, 105.0, 110.0)
+        assert 0.0 < result["delta"] < 1.0

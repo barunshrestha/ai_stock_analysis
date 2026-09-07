@@ -166,6 +166,19 @@ class OptionsLeg(Base):
     trade = relationship('OptionsTrade', back_populates='legs')
 
 
+class TickerAnalysisNote(Base):
+    """User analysis notes keyed by ticker + note type (e.g. liquidity)."""
+    __tablename__ = 'ticker_analysis_notes'
+    __table_args__ = (UniqueConstraint('ticker', 'note_key', name='uq_ticker_note_key'),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String(10), nullable=False)
+    note_key = Column(String(40), nullable=False)
+    content = Column(Text, nullable=False, default='')
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class DatabaseManager:
     def __init__(self):
         self.database_url = os.getenv('DATABASE_URL')
@@ -1176,3 +1189,62 @@ class DatabaseManager:
                 for leg in legs
             ],
         }
+
+    def get_ticker_analysis_note(self, ticker: str, note_key: str) -> dict | None:
+        session = self.get_session()
+        try:
+            row = (
+                session.query(TickerAnalysisNote)
+                .filter(
+                    TickerAnalysisNote.ticker == ticker.upper(),
+                    TickerAnalysisNote.note_key == note_key,
+                )
+                .first()
+            )
+            if not row:
+                return None
+            return {
+                'ticker': row.ticker,
+                'note_key': row.note_key,
+                'content': row.content or '',
+                'updated_at': row.updated_at.isoformat() if row.updated_at else None,
+            }
+        except Exception as e:
+            logger.error(f"Error fetching ticker note {ticker}/{note_key}: {e}")
+            return None
+        finally:
+            session.close()
+
+    def upsert_ticker_analysis_note(self, ticker: str, note_key: str, content: str) -> dict | None:
+        session = self.get_session()
+        try:
+            ticker = ticker.upper().strip()
+            row = (
+                session.query(TickerAnalysisNote)
+                .filter(
+                    TickerAnalysisNote.ticker == ticker,
+                    TickerAnalysisNote.note_key == note_key,
+                )
+                .first()
+            )
+            if row:
+                row.content = content
+                row.updated_at = datetime.utcnow()
+            else:
+                row = TickerAnalysisNote(ticker=ticker, note_key=note_key, content=content)
+                session.add(row)
+            session.commit()
+            session.refresh(row)
+            return {
+                'ticker': row.ticker,
+                'note_key': row.note_key,
+                'content': row.content or '',
+                'updated_at': row.updated_at.isoformat() if row.updated_at else None,
+            }
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error saving ticker note {ticker}/{note_key}: {e}")
+            return None
+        finally:
+            session.close()
+

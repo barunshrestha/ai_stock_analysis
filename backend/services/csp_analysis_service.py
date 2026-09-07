@@ -1,19 +1,92 @@
-"""CSP pre-execution screening and post-execution monitoring (Issue #2)."""
+"""Options pre-execution screening and CSP post-execution monitoring (Issue #2)."""
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 
 from backend.config import (
     CSP_BREACH_PCT,
     CSP_EVENT_HORIZON_DAYS,
     CSP_IV_REALIZED_MIN_RATIO,
     CSP_OTM_PCT_GOOD,
+    CSP_TARGET_DELTA,
     TTL_OPTIONS_MONITOR,
 )
 from backend.cache import ttl_cache
 from backend.schemas.csp import CspMonitorResponse, CspScreenResponse, CspVerdict, SuggestedContract
+from backend.schemas.options import STRATEGY_META
 from backend.services import options_chain_service, stock_service
+
+# Contract suggestion rules per strategy. None = stock fundamentals only (no auto-fill leg).
+_SCREEN_CONTRACT: dict[str, dict | None] = {
+    "cash_secured_put": {
+        "option_type": "put",
+        "side": "sell_to_open",
+        "target_delta": CSP_TARGET_DELTA,
+        "note": "Primary short put (~0.30Δ).",
+    },
+    "short_put": {
+        "option_type": "put",
+        "side": "sell_to_open",
+        "target_delta": CSP_TARGET_DELTA,
+        "note": "Short put (~0.30Δ).",
+    },
+    "covered_call": {
+        "option_type": "call",
+        "side": "sell_to_open",
+        "target_delta": CSP_TARGET_DELTA,
+        "note": "Covered call (~0.30Δ). Assumes you already own 100 shares per contract.",
+    },
+    "short_call": {
+        "option_type": "call",
+        "side": "sell_to_open",
+        "target_delta": CSP_TARGET_DELTA,
+        "note": "Short call (~0.30Δ).",
+    },
+    "long_call": {
+        "option_type": "call",
+        "side": "buy_to_open",
+        "target_delta": 0.50,
+        "note": "Near-ATM long call (~0.50Δ).",
+    },
+    "long_put": {
+        "option_type": "put",
+        "side": "buy_to_open",
+        "target_delta": 0.50,
+        "note": "Near-ATM long put (~0.50Δ).",
+    },
+    "put_credit_spread": {
+        "option_type": "put",
+        "side": "sell_to_open",
+        "target_delta": CSP_TARGET_DELTA,
+        "note": "Short put leg only (~0.30Δ) — add the long put yourself.",
+    },
+    "call_credit_spread": {
+        "option_type": "call",
+        "side": "sell_to_open",
+        "target_delta": CSP_TARGET_DELTA,
+        "note": "Short call leg only (~0.30Δ) — add the long call yourself.",
+    },
+    "put_debit_spread": {
+        "option_type": "put",
+        "side": "buy_to_open",
+        "target_delta": 0.50,
+        "note": "Long put leg only (~0.50Δ) — add the short put yourself.",
+    },
+    "call_debit_spread": {
+        "option_type": "call",
+        "side": "buy_to_open",
+        "target_delta": 0.50,
+        "note": "Long call leg only (~0.50Δ) — add the short call yourself.",
+    },
+    "iron_condor": {
+        "option_type": "put",
+        "side": "sell_to_open",
+        "target_delta": CSP_TARGET_DELTA,
+        "note": "Short put wing only (~0.30Δ) — fill remaining legs yourself.",
+    },
+    "custom": None,
+}
 
 
 def compute_unrealized_pnl_pct(initial_premium: float, current_mid: float | None) -> float | None:
@@ -38,7 +111,12 @@ def compute_breached(spot: float | None, strike_price: float, breach_pct: float 
     return False
 
 
-def _build_markdown(pros: list[str], cons: list[str], verdict: CspVerdict, title: str = "CSP Analysis") -> str:
+def _strategy_label(strategy: str) -> str:
+    meta = STRATEGY_META.get(strategy) or {}
+    return str(meta.get("label") or strategy.replace("_", " ").title())
+
+
+def _build_markdown(pros: list[str], cons: list[str], verdict: CspVerdict, title: str) -> str:
     lines = [f"## {title}", ""]
     lines.append("### Pros (Premium Efficiency and Safety Drivers)")
     for p in pros or ["None identified."]:
@@ -60,9 +138,19 @@ def _build_markdown(pros: list[str], cons: list[str], verdict: CspVerdict, title
 
 
 def analyze_stock_for_csp(ticker_symbol: str) -> CspScreenResponse:
+    return analyze_stock_for_strategy(ticker_symbol, "cash_secured_put")
+
+
+def analyze_stock_for_strategy(ticker_symbol: str, strategy: str | None = None) -> CspScreenResponse:
     symbol = ticker_symbol.strip().upper()
     if not symbol:
         raise ValueError("Ticker is required.")
+
+    strategy_key = (strategy or "cash_secured_put").strip().lower()
+    if strategy_key not in _SCREEN_CONTRACT:
+        raise ValueError(f"Unsupported strategy for screening: {strategy_key}")
+    label = _strategy_label(strategy_key)
+    contract_cfg = _SCREEN_CONTRACT[strategy_key]
 
     hist = stock_service.get_history(symbol, "1y")
     if hist is None or hist.empty:
@@ -72,18 +160,7 @@ def analyze_stock_for_csp(ticker_symbol: str) -> CspScreenResponse:
     events = options_chain_service.get_upcoming_events(symbol, CSP_EVENT_HORIZON_DAYS)
     technicals = options_chain_service.get_ema_levels(hist)
     realized_vol = options_chain_service.realized_vol_30d(hist)
-
-    exp_str, dte = options_chain_service.pick_expiration_in_dte_window(symbol)
-    if not exp_str:
-        raise LookupError(f"No options expiration found in {30}-{45} DTE window for '{symbol}'")
-
-    exp_date = options_chain_service._parse_expiration(exp_str)
-    if not exp_date:
-        raise LookupError(f"Could not parse expiration '{exp_str}' for '{symbol}'")
-
-    puts = options_chain_service.get_puts_chain(symbol, exp_str)
     spot = technicals["current_price"]
-    suggested = options_chain_service.find_put_near_delta(puts, spot, exp_date)
 
     pros: list[str] = []
     cons: list[str] = []
@@ -94,7 +171,7 @@ def analyze_stock_for_csp(ticker_symbol: str) -> CspScreenResponse:
         if dte_ratio < 100:
             pros.append(f"Debt-to-equity ({dte_ratio:.1f}) is moderate — balance sheet risk acceptable.")
         else:
-            cons.append(f"Elevated debt-to-equity ({dte_ratio:.1f}) increases assignment risk if stock falls.")
+            cons.append(f"Elevated debt-to-equity ({dte_ratio:.1f}) increases downside risk if stock falls.")
             risk_score += 1
 
     fcf = fundamentals.get("free_cash_flow")
@@ -102,7 +179,7 @@ def analyze_stock_for_csp(ticker_symbol: str) -> CspScreenResponse:
         if fcf > 0:
             pros.append("Positive free cash flow supports fundamental health.")
         else:
-            cons.append("Negative free cash flow — fundamental drag on long-term hold if assigned.")
+            cons.append("Negative free cash flow — fundamental drag if you hold or get assigned shares.")
             risk_score += 1
 
     if events["earnings_within_horizon"]:
@@ -129,52 +206,108 @@ def analyze_stock_for_csp(ticker_symbol: str) -> CspScreenResponse:
     elif technicals.get("above_ema_200"):
         pros.append(f"Price above 200-day EMA (${technicals['ema_200']:.2f}).")
 
-    iv = suggested.get("implied_volatility") if suggested else None
+    exp_str: str | None = None
+    dte: int | None = None
+    suggested: dict | None = None
+    suggested_contract: SuggestedContract | None = None
+    margin_otm = None
     iv_ratio = None
+
+    if contract_cfg is not None:
+        exp_str, dte = options_chain_service.pick_expiration_in_dte_window(symbol)
+        if not exp_str:
+            raise LookupError(f"No options expiration found in {30}-{45} DTE window for '{symbol}'")
+
+        exp_date = options_chain_service._parse_expiration(exp_str)
+        if not exp_date:
+            raise LookupError(f"Could not parse expiration '{exp_str}' for '{symbol}'")
+
+        option_type = contract_cfg["option_type"]
+        target_delta = float(contract_cfg["target_delta"])
+        side = contract_cfg["side"]
+        chain = (
+            options_chain_service.get_calls_chain(symbol, exp_str)
+            if option_type == "call"
+            else options_chain_service.get_puts_chain(symbol, exp_str)
+        )
+        suggested = options_chain_service.find_option_near_delta(
+            chain, spot, exp_date, option_type=option_type, target_delta=target_delta
+        )
+
+        if suggested:
+            suggested_contract = SuggestedContract(
+                strike=suggested["strike"],
+                expiration=exp_str,
+                dte=dte or 0,
+                premium_mid=suggested["premium_mid"],
+                delta=suggested["delta"],
+                option_type=option_type,
+                side=side,
+                target_delta=target_delta,
+                implied_volatility=suggested.get("implied_volatility"),
+                bid=suggested.get("bid"),
+                ask=suggested.get("ask"),
+                spread_pct=suggested.get("spread_pct"),
+                open_interest=suggested.get("open_interest"),
+                volume=suggested.get("volume"),
+                otm_pct=suggested.get("otm_pct"),
+                liquidity_ok=suggested.get("liquidity_ok", True),
+                note=contract_cfg.get("note"),
+            )
+            otm = suggested.get("otm_pct") or 0
+            margin_otm = otm if otm > 0 else 0
+            opt_label = "call" if option_type == "call" else "put"
+            delta_label = f"~{target_delta:.2f}-delta"
+            is_short = side == "sell_to_open"
+
+            if is_short:
+                if margin_otm >= CSP_OTM_PCT_GOOD:
+                    pros.append(
+                        f"Suggested {delta_label} {opt_label} is {margin_otm:.1f}% OTM — reasonable margin of safety."
+                    )
+                elif margin_otm > 0:
+                    cons.append(f"Suggested {opt_label} only {margin_otm:.1f}% OTM — limited buffer.")
+                    risk_score += 1
+                else:
+                    cons.append(f"Suggested {opt_label} is at or in the money — elevated assignment risk.")
+                    risk_score += 2
+            else:
+                if abs(otm) <= 3:
+                    pros.append(f"Suggested {delta_label} {opt_label} is near ATM — typical for long premium.")
+                elif otm > 0:
+                    pros.append(f"Suggested long {opt_label} is {otm:.1f}% OTM.")
+                else:
+                    cons.append(f"Suggested long {opt_label} is ITM ({abs(otm):.1f}%) — higher cost / less leverage.")
+                    risk_score += 1
+
+            if not suggested.get("liquidity_ok"):
+                cons.append("Wide bid-ask spread or low open interest on suggested contract.")
+                risk_score += 1
+            else:
+                pros.append("Suggested contract has acceptable liquidity (spread/OI).")
+    else:
+        pros.append("Custom strategy — stock suitability only; pick legs manually.")
+
+    iv = suggested.get("implied_volatility") if suggested else None
     if iv and realized_vol and realized_vol > 0:
         iv_pct = iv * 100 if iv < 3 else iv
         iv_ratio = iv_pct / realized_vol
-        if iv_ratio >= CSP_IV_REALIZED_MIN_RATIO:
-            pros.append(f"Implied vol ({iv_pct:.1f}%) vs 30d realized ({realized_vol:.1f}%) — premiums relatively rich.")
+        if contract_cfg and contract_cfg.get("side") == "buy_to_open":
+            if iv_ratio >= CSP_IV_REALIZED_MIN_RATIO:
+                cons.append(f"IV rich vs realized (ratio {iv_ratio:.2f}) — long premium may be expensive.")
+                risk_score += 1
+            else:
+                pros.append(f"IV vs 30d realized looks reasonable for buying premium (ratio {iv_ratio:.2f}).")
         else:
-            cons.append(f"IV below realized vol (ratio {iv_ratio:.2f}) — premium may not compensate for risk.")
-            risk_score += 1
+            if iv_ratio >= CSP_IV_REALIZED_MIN_RATIO:
+                pros.append(
+                    f"Implied vol ({iv_pct:.1f}%) vs 30d realized ({realized_vol:.1f}%) — premiums relatively rich."
+                )
+            else:
+                cons.append(f"IV below realized vol (ratio {iv_ratio:.2f}) — premium may not compensate for risk.")
+                risk_score += 1
     elif realized_vol:
         pros.append(f"30-day realized volatility: {realized_vol:.1f}% (IV unavailable for comparison).")
-
-    suggested_contract: SuggestedContract | None = None
-    margin_otm = None
-    if suggested:
-        suggested_contract = SuggestedContract(
-            strike=suggested["strike"],
-            expiration=exp_str,
-            dte=dte or 0,
-            premium_mid=suggested["premium_mid"],
-            delta=suggested["delta"],
-            implied_volatility=suggested.get("implied_volatility"),
-            bid=suggested.get("bid"),
-            ask=suggested.get("ask"),
-            spread_pct=suggested.get("spread_pct"),
-            open_interest=suggested.get("open_interest"),
-            volume=suggested.get("volume"),
-            otm_pct=suggested.get("otm_pct"),
-            liquidity_ok=suggested.get("liquidity_ok", True),
-        )
-        otm = suggested.get("otm_pct") or 0
-        margin_otm = otm if otm > 0 else 0
-        if margin_otm >= CSP_OTM_PCT_GOOD:
-            pros.append(f"Suggested ~0.30-delta put is {margin_otm:.1f}% OTM — reasonable margin of safety.")
-        elif margin_otm > 0:
-            cons.append(f"Suggested put only {margin_otm:.1f}% OTM — limited buffer.")
-            risk_score += 1
-        else:
-            cons.append("Suggested put is at or in the money — high assignment risk.")
-            risk_score += 2
-        if not suggested.get("liquidity_ok"):
-            cons.append("Wide bid-ask spread or low open interest on suggested contract.")
-            risk_score += 1
-        else:
-            pros.append("Suggested contract has acceptable liquidity (spread/OI).")
 
     if risk_score >= 3:
         overall = "high_risk"
@@ -187,7 +320,10 @@ def analyze_stock_for_csp(ticker_symbol: str) -> CspScreenResponse:
     else:
         overall = "favorable"
         color = "green"
-        summary = "Key metrics favor a cash-secured put at the suggested strike."
+        if suggested_contract:
+            summary = f"Key metrics favor a {label.lower()} near the suggested strike."
+        else:
+            summary = f"Key metrics look favorable for {label.lower()} on this ticker (no auto contract)."
 
     verdict = CspVerdict(
         recommended_strike=suggested["strike"] if suggested else None,
@@ -208,10 +344,12 @@ def analyze_stock_for_csp(ticker_symbol: str) -> CspScreenResponse:
         "suggested_contract": suggested,
     }
 
-    md = _build_markdown(pros, cons, verdict, f"CSP Pre-Execution: {symbol}")
+    md = _build_markdown(pros, cons, verdict, f"{label} Pre-Execution: {symbol}")
 
     return CspScreenResponse(
         ticker=symbol,
+        strategy=strategy_key,
+        strategy_label=label,
         overall_verdict=overall,
         recommendation_color=color,
         sections=sections,
@@ -298,4 +436,9 @@ def _monitor_active_csp_cached(
         recommendation_color=color,
         recommendation=rec,
         markdown="\n".join(md_lines),
+        bid=contract.get("bid") if contract else None,
+        ask=contract.get("ask") if contract else None,
+        spread_pct=contract.get("spread_pct") if contract else None,
+        open_interest=contract.get("open_interest") if contract else None,
+        liquidity_ok=contract.get("liquidity_ok") if contract else None,
     )

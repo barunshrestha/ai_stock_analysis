@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LiquidityWarningPopover } from "@/components/options/liquidity-warning-popover";
 
 export function CspMonitorPanel({
   tradeId,
@@ -73,6 +74,22 @@ export function CspMonitorPanel({
             <p className="mt-1 text-xs opacity-90">
               Spot ${data.current_spot?.toFixed(2)} is at or within 3% of strike ${data.strike_price.toFixed(2)}.
             </p>
+          </div>
+        )}
+
+        {data.liquidity_ok === false && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+            <LiquidityWarningPopover
+              ticker={data.ticker}
+              storageMode="server"
+              metrics={{
+                bid: data.bid,
+                ask: data.ask,
+                premium_mid: data.current_mid,
+                spread_pct: data.spread_pct,
+                open_interest: data.open_interest,
+              }}
+            />
           </div>
         )}
 

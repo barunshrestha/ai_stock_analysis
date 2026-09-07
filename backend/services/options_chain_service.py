@@ -56,6 +56,19 @@ def get_puts_chain(symbol: str, expiration: str) -> pd.DataFrame:
     return with_retry(_fetch, attempts=2)
 
 
+def get_calls_chain(symbol: str, expiration: str) -> pd.DataFrame:
+    ticker = get_ticker(symbol.upper())
+
+    def _fetch():
+        chain = ticker.option_chain(expiration)
+        calls = chain.calls
+        if calls is None or calls.empty:
+            return pd.DataFrame()
+        return calls.copy()
+
+    return with_retry(_fetch, attempts=2)
+
+
 def pick_expiration_in_dte_window(
     symbol: str,
     min_dte: int = CSP_DTE_MIN,
@@ -109,20 +122,34 @@ def estimate_put_delta(strike: float, spot: float, tte_years: float, iv: float, 
         return 0.0
 
 
-def _row_delta(row: pd.Series, spot: float, tte_years: float) -> float:
+def estimate_call_delta(strike: float, spot: float, tte_years: float, iv: float, rate: float = CSP_RISK_FREE_RATE) -> float:
+    if tte_years <= 0 or iv <= 0 or spot <= 0 or strike <= 0:
+        return 0.0
+    try:
+        from py_vollib.black_scholes.greeks.analytical import delta
+
+        return float(delta("c", spot, strike, tte_years, rate, iv))
+    except Exception:
+        return 0.0
+
+
+def _row_delta(row: pd.Series, spot: float, tte_years: float, option_type: str = "put") -> float:
     if "delta" in row.index and row.get("delta") is not None and not pd.isna(row.get("delta")):
         return abs(float(row["delta"]))
     iv = row.get("impliedVolatility")
     strike = float(row.get("strike", 0))
     if iv is None or pd.isna(iv) or iv <= 0:
         iv = 0.25
+    if option_type == "call":
+        return abs(estimate_call_delta(strike, spot, tte_years, float(iv)))
     return abs(estimate_put_delta(strike, spot, tte_years, float(iv)))
 
 
-def find_put_near_delta(
+def find_option_near_delta(
     chain: pd.DataFrame,
     spot: float,
     expiration_date: date,
+    option_type: str = "put",
     target_delta: float = CSP_TARGET_DELTA,
     as_of: date | None = None,
 ) -> dict | None:
@@ -132,12 +159,13 @@ def find_put_near_delta(
     tte_years = max(_dte(expiration_date, ref), 1) / 365.0
     best: dict | None = None
     best_diff = float("inf")
+    option_type = "call" if option_type == "call" else "put"
 
     for _, row in chain.iterrows():
         strike = float(row.get("strike", 0))
         if strike <= 0:
             continue
-        d = _row_delta(row, spot, tte_years)
+        d = _row_delta(row, spot, tte_years, option_type)
         diff = abs(d - target_delta)
         mid = option_mid_price(row)
         if mid is None:
@@ -149,9 +177,14 @@ def find_put_near_delta(
         vol = _safe_int(row.get("volume"))
         iv = row.get("impliedVolatility")
         iv_f = float(iv) if iv is not None and not pd.isna(iv) else None
+        if option_type == "call":
+            otm_pct = round((strike - spot) / spot * 100, 2)
+        else:
+            otm_pct = round((spot - strike) / spot * 100, 2)
 
         candidate = {
             "strike": strike,
+            "option_type": option_type,
             "delta": round(d, 4),
             "premium_mid": round(mid, 2),
             "bid": round(bid, 2),
@@ -160,13 +193,23 @@ def find_put_near_delta(
             "open_interest": oi,
             "volume": vol,
             "implied_volatility": round(iv_f, 4) if iv_f else None,
-            "otm_pct": round((spot - strike) / spot * 100, 2) if spot > strike else round((spot - strike) / spot * 100, 2),
+            "otm_pct": otm_pct,
             "liquidity_ok": (spread_pct is None or spread_pct <= CSP_SPREAD_PCT_MAX) and oi >= CSP_MIN_OPEN_INTEREST,
         }
         if diff < best_diff:
             best_diff = diff
             best = candidate
     return best
+
+
+def find_put_near_delta(
+    chain: pd.DataFrame,
+    spot: float,
+    expiration_date: date,
+    target_delta: float = CSP_TARGET_DELTA,
+    as_of: date | None = None,
+) -> dict | None:
+    return find_option_near_delta(chain, spot, expiration_date, "put", target_delta, as_of)
 
 
 def realized_vol_30d(hist: pd.DataFrame) -> float | None:
@@ -287,4 +330,11 @@ def find_put_at_strike(symbol: str, expiration: str, strike: float) -> dict | No
         "delta": round(_row_delta(row, spot, tte), 4),
         "implied_volatility": float(row["impliedVolatility"]) if row.get("impliedVolatility") is not None and not pd.isna(row.get("impliedVolatility")) else None,
         "current_spot": round(spot, 2),
+        "spread_pct": round(((float(row.get("ask") or 0) - float(row.get("bid") or 0)) / mid * 100), 2) if mid > 0 else None,
+        "open_interest": _safe_int(row.get("openInterest")),
+        "volume": _safe_int(row.get("volume")),
+        "liquidity_ok": (
+            (mid <= 0 or ((float(row.get("ask") or 0) - float(row.get("bid") or 0)) / mid * 100) <= CSP_SPREAD_PCT_MAX)
+            and _safe_int(row.get("openInterest")) >= CSP_MIN_OPEN_INTEREST
+        ),
     }

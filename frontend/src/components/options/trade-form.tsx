@@ -93,17 +93,16 @@ export function TradeForm({
   const onStrategyChange = (s: StrategyType) => {
     setStrategy(s);
     setLegs(buildLegs(s));
+    setCspScreen(null);
   };
 
-  const isCspStrategy = strategy === "cash_secured_put" || strategy === "short_put";
-
   const screenMut = useMutation({
-    mutationFn: () => api.cspScreen(ticker),
+    mutationFn: () => api.cspScreen(ticker, strategy),
     onSuccess: (data) => {
       setCspScreen(data);
       setError(null);
     },
-    onError: (e: Error) => setError(e instanceof ApiError ? e.message : "CSP screen failed"),
+    onError: (e: Error) => setError(e instanceof ApiError ? e.message : "Stock screen failed"),
   });
 
   const applySuggestedContract = () => {
@@ -115,7 +114,10 @@ export function TradeForm({
     } else {
       setExpirationDate(c.expiration.slice(0, 10));
     }
-    setNetCreditDebit(String(c.premium_mid));
+    const optionType = c.option_type ?? "put";
+    const side = c.side ?? "sell_to_open";
+    const signedPremium = side === "buy_to_open" ? -Math.abs(c.premium_mid) : Math.abs(c.premium_mid);
+    setNetCreditDebit(String(signedPremium));
     setLegs((prev) =>
       prev.map((leg, i) =>
         i === 0
@@ -123,8 +125,8 @@ export function TradeForm({
               ...leg,
               strike: c.strike,
               premium_per_contract: c.premium_mid,
-              option_type: "put",
-              side: "sell_to_open",
+              option_type: optionType,
+              side,
             }
           : leg,
       ),
@@ -134,7 +136,7 @@ export function TradeForm({
   const handleSave = () => {
     if (cspScreen?.recommendation_color === "red") {
       const ok = window.confirm(
-        "CSP screen flagged elevated risk (red). Save this trade anyway?",
+        "Stock screen flagged elevated risk (red). Save this trade anyway?",
       );
       if (!ok) return;
     }
@@ -298,16 +300,14 @@ export function TradeForm({
                 readOnly={isEdit}
                 className={isEdit ? "bg-muted" : undefined}
               />
-              {isCspStrategy && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => screenMut.mutate()}
-                  disabled={screenMut.isPending || !ticker}
-                >
-                  {screenMut.isPending ? "Screening…" : "Screen ticker"}
-                </Button>
-              )}
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => screenMut.mutate()}
+                disabled={screenMut.isPending || !ticker}
+              >
+                {screenMut.isPending ? "Screening…" : "Screen ticker"}
+              </Button>
             </div>
           </label>
           <label className="space-y-1 text-sm">

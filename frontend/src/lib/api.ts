@@ -392,6 +392,9 @@ export interface CspSuggestedContract {
   dte: number;
   premium_mid: number;
   delta: number;
+  option_type?: "put" | "call";
+  side?: "sell_to_open" | "buy_to_open";
+  target_delta?: number | null;
   implied_volatility: number | null;
   bid: number | null;
   ask: number | null;
@@ -400,10 +403,13 @@ export interface CspSuggestedContract {
   volume: number | null;
   otm_pct: number | null;
   liquidity_ok: boolean;
+  note?: string | null;
 }
 
 export interface CspScreenResult {
   ticker: string;
+  strategy?: string;
+  strategy_label?: string;
   overall_verdict: "favorable" | "mixed" | "high_risk";
   recommendation_color: "green" | "red";
   sections: Record<string, unknown>;
@@ -433,7 +439,19 @@ export interface CspMonitorResult {
   recommendation_color: "green" | "red";
   recommendation: string;
   markdown: string;
+  bid?: number | null;
+  ask?: number | null;
+  spread_pct?: number | null;
+  open_interest?: number | null;
+  liquidity_ok?: boolean | null;
   disclaimer: string;
+}
+
+export interface TickerAnalysisNote {
+  ticker: string;
+  note_key: string;
+  content: string;
+  updated_at: string | null;
 }
 
 export interface CspMonitoringAlert {
@@ -579,11 +597,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  cspScreen: (ticker: string) =>
+  cspScreen: (ticker: string, strategy?: StrategyType) =>
     request<CspScreenResult>(`/api/options/csp/screen`, {
       method: "POST",
-      body: JSON.stringify({ ticker }),
+      body: JSON.stringify({ ticker, strategy: strategy ?? "cash_secured_put" }),
     }),
+  getTickerNote: (ticker: string, noteKey = "liquidity") =>
+    request<TickerAnalysisNote>(
+      `/api/options/ticker-notes/${encodeURIComponent(ticker)}?note_key=${encodeURIComponent(noteKey)}`,
+    ),
+  putTickerNote: (ticker: string, content: string, noteKey = "liquidity") =>
+    request<TickerAnalysisNote>(
+      `/api/options/ticker-notes/${encodeURIComponent(ticker)}?note_key=${encodeURIComponent(noteKey)}`,
+      { method: "PUT", body: JSON.stringify({ content }) },
+    ),
   cspMonitorTrade: (id: number) => request<CspMonitorResult>(`/api/options/trades/${id}/monitor`),
   cspMonitoringSummary: () =>
     request<{ alerts: CspMonitoringAlert[] }>(`/api/options/monitoring/summary`),

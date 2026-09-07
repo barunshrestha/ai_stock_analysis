@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { statusColor } from "@/components/options/constants";
+import { LiquidityWarningPopover } from "@/components/options/liquidity-warning-popover";
 
 export function CspScreenPanel({
   screen,
@@ -17,12 +18,21 @@ export function CspScreenPanel({
   if (!screen) return null;
 
   const contract = screen.suggested_contract;
+  const strategyLabel = screen.strategy_label ?? "Stock";
+  const optionType = contract?.option_type ?? "put";
+  const targetDelta = contract?.target_delta ?? 0.3;
+  const contractTitle = contract
+    ? `Suggested ~${targetDelta.toFixed(2)}-delta ${optionType}`
+    : null;
 
   return (
     <Card>
       <CardHeader className="pb-2">
         <div className="flex flex-wrap items-center gap-2">
-          <CardTitle className="text-base">CSP ticker screen — {screen.ticker}</CardTitle>
+          <CardTitle className="text-base">
+            Stock screen — {screen.ticker}
+            <span className="font-normal text-muted-foreground"> ({strategyLabel})</span>
+          </CardTitle>
           <Badge variant="outline" className={cn("capitalize", statusColor(screen.overall_verdict))}>
             {screen.overall_verdict.replace("_", " ")}
           </Badge>
@@ -54,15 +64,29 @@ export function CspScreenPanel({
 
         {contract && (
           <div className="rounded-lg border bg-muted/20 p-3 text-sm">
-            <p className="font-medium">Suggested ~0.30-delta put</p>
+            <p className="font-medium">{contractTitle}</p>
+            {contract.note && <p className="mt-1 text-xs text-muted-foreground">{contract.note}</p>}
             <div className="mt-2 grid gap-1 sm:grid-cols-2">
               <span>Strike: ${contract.strike.toFixed(2)}</span>
-              <span>Expiration: {contract.expiration} ({contract.dte} DTE)</span>
+              <span>
+                Expiration: {contract.expiration} ({contract.dte} DTE)
+              </span>
               <span>Premium (mid): ${contract.premium_mid.toFixed(2)}</span>
               <span>Delta: {contract.delta.toFixed(2)}</span>
               {contract.otm_pct != null && <span>OTM: {contract.otm_pct.toFixed(1)}%</span>}
               {!contract.liquidity_ok && (
-                <span className="text-amber-600 dark:text-amber-400">Low liquidity / wide spread</span>
+                <LiquidityWarningPopover
+                  ticker={screen.ticker}
+                  storageMode="browser"
+                  metrics={{
+                    bid: contract.bid,
+                    ask: contract.ask,
+                    premium_mid: contract.premium_mid,
+                    spread_pct: contract.spread_pct,
+                    open_interest: contract.open_interest,
+                    volume: contract.volume,
+                  }}
+                />
               )}
             </div>
             {onApply && (
