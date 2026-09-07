@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BrainCircuit, ChevronDown, Loader2, RefreshCw } from "lucide-react";
 
-import { api, ApiError, type WallStreetAnalysis } from "@/lib/api";
+import { api, ApiError, type WallStreetAnalysis, type WallStreetCacheLookup } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,28 @@ function stanceClass(stance: string) {
   }
 }
 
+function formatCachedAt(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString();
+}
+
+function cacheLookupToAnalysis(data: WallStreetCacheLookup): WallStreetAnalysis | null {
+  if (!data.cached || !data.markdown) return null;
+  return {
+    symbol: data.symbol,
+    metrics: data.metrics ?? {},
+    markdown: data.markdown,
+    structured: data.structured ?? null,
+    model: data.model ?? "unknown",
+    disclaimer: data.disclaimer ?? "Not financial advice — for journaling and education only.",
+    cached: true,
+    source: "cache",
+    updated_at: data.updated_at ?? null,
+  };
+}
+
 function MetricsPreview({ metrics }: { metrics: Record<string, unknown> }) {
   const [open, setOpen] = useState(false);
   return (
@@ -53,8 +75,19 @@ function MetricsPreview({ metrics }: { metrics: Record<string, unknown> }) {
 
 function ResultBody({ data }: { data: WallStreetAnalysis }) {
   const s = data.structured;
+  const source = data.source ?? (data.cached ? "cache" : "live");
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant={source === "cache" ? "secondary" : "outline"}>
+          {source === "cache" ? "Cached" : "Live"}
+        </Badge>
+        {data.updated_at && (
+          <span className="text-xs text-muted-foreground">
+            {source === "cache" ? "Cached at" : "Generated at"} {formatCachedAt(data.updated_at)}
+          </span>
+        )}
+      </div>
       {s && (
         <div className="flex flex-wrap gap-2">
           <Badge variant="outline" className={cn("capitalize", stanceClass(s.overall_stance))}>
@@ -97,57 +130,105 @@ function ResultBody({ data }: { data: WallStreetAnalysis }) {
 }
 
 /**
- * On-demand Gemini Wall Street memo grounded on yFinance metrics (Issue #6).
+ * On-demand Gemini Wall Street memo with DB cache (Use cached vs Regenerate).
  */
 export function WallStreetAnalysisPanel({ symbol }: { symbol: string }) {
-  const mutation = useMutation({
-    mutationFn: () => api.aiWallStreet(symbol),
+  const queryClient = useQueryClient();
+  const [displayed, setDisplayed] = useState<WallStreetAnalysis | null>(null);
+
+  useEffect(() => {
+    setDisplayed(null);
+  }, [symbol]);
+
+  const cacheQuery = useQuery({
+    queryKey: ["ai-wall-street-cache", symbol],
+    queryFn: () => api.aiWallStreetCache(symbol),
   });
+
+  const generateMut = useMutation({
+    mutationFn: () => api.aiWallStreet(symbol, "1y", true),
+    onSuccess: (data) => {
+      setDisplayed(data);
+      void queryClient.invalidateQueries({ queryKey: ["ai-wall-street-cache", symbol] });
+    },
+  });
+
+  const hasCache = Boolean(cacheQuery.data?.cached);
+  const cachedAt = formatCachedAt(cacheQuery.data?.updated_at);
+  const busy = generateMut.isPending || cacheQuery.isPending;
+
+  const useCached = () => {
+    if (!cacheQuery.data) return;
+    const analysis = cacheLookupToAnalysis(cacheQuery.data);
+    if (analysis) setDisplayed(analysis);
+  };
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-2">
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
         <CardTitle className="flex items-center gap-2 text-base">
           <BrainCircuit className="size-4" />
           Wall Street–style analysis
         </CardTitle>
-        <Button
-          size="sm"
-          variant={mutation.data ? "ghost" : "default"}
-          disabled={mutation.isPending}
-          onClick={() => mutation.mutate()}
-        >
-          {mutation.isPending ? (
-            <>
-              <Loader2 className="size-4 animate-spin" />
-              Generating…
-            </>
-          ) : mutation.data ? (
-            <>
-              <RefreshCw className="size-4" />
-              Regenerate
-            </>
-          ) : (
-            "Generate"
+        <div className="flex flex-wrap gap-2">
+          {hasCache && (
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy}
+              onClick={useCached}
+            >
+              Use cached
+            </Button>
           )}
-        </Button>
+          <Button
+            size="sm"
+            variant={displayed || hasCache ? "outline" : "default"}
+            disabled={busy}
+            onClick={() => generateMut.mutate()}
+          >
+            {generateMut.isPending ? (
+              <>
+                <Loader2 className="size-4 animate-spin" />
+                Generating…
+              </>
+            ) : hasCache || displayed ? (
+              <>
+                <RefreshCw className="size-4" />
+                Regenerate
+              </>
+            ) : (
+              "Generate"
+            )}
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
-        {mutation.isIdle && (
-          <p className="text-sm text-muted-foreground">
-            Pull live yFinance metrics and ask Gemini for a grounded equity research memo
-            (business, moat, risks, valuation, bull/base/bear, outlook).
-          </p>
+        {!displayed && !generateMut.isPending && !generateMut.isError && (
+          <div className="space-y-2 text-sm text-muted-foreground">
+            <p>
+              Pull live yFinance metrics and ask Gemini for a grounded equity research memo
+              (business, moat, risks, valuation, bull/base/bear, outlook).
+            </p>
+            {cacheQuery.isPending && <p>Checking for a saved memo…</p>}
+            {hasCache && (
+              <p>
+                A saved memo is available
+                {cachedAt ? ` (cached ${cachedAt})` : ""}. Use cached for an instant view, or
+                regenerate to call Gemini again.
+              </p>
+            )}
+          </div>
         )}
-        {mutation.isPending && (
+        {generateMut.isPending && (
           <p className="text-sm text-muted-foreground">
             Fetching metrics and calling Gemini — this can take a short while…
           </p>
         )}
-        {mutation.isError && (
-          <p className="text-sm text-negative">{geminiErrorMessage(mutation.error)}</p>
+        {generateMut.isError && (
+          <p className="text-sm text-negative">{geminiErrorMessage(generateMut.error)}</p>
         )}
-        {mutation.data && <ResultBody data={mutation.data} />}
+        {displayed && <ResultBody data={displayed} />}
       </CardContent>
     </Card>
   );

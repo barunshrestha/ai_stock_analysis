@@ -179,6 +179,22 @@ class TickerAnalysisNote(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class AiAnalysisCache(Base):
+    """Cached LLM/Gemini analysis memos keyed by ticker + analysis type."""
+    __tablename__ = 'ai_analysis_cache'
+    __table_args__ = (UniqueConstraint('ticker', 'analysis_type', name='uq_ai_cache_ticker_type'),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String(10), nullable=False)
+    analysis_type = Column(String(40), nullable=False)
+    model = Column(String(80), nullable=True)
+    markdown = Column(Text, nullable=False, default='')
+    structured_json = Column(Text, nullable=True)
+    metrics_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class DatabaseManager:
     def __init__(self):
         self.database_url = os.getenv('DATABASE_URL')
@@ -1244,6 +1260,98 @@ class DatabaseManager:
         except Exception as e:
             session.rollback()
             logger.error(f"Error saving ticker note {ticker}/{note_key}: {e}")
+            return None
+        finally:
+            session.close()
+
+    def _ai_cache_row_to_dict(self, row: AiAnalysisCache) -> dict:
+        structured = None
+        metrics = None
+        if row.structured_json:
+            try:
+                structured = json.loads(row.structured_json)
+            except json.JSONDecodeError:
+                structured = None
+        if row.metrics_json:
+            try:
+                metrics = json.loads(row.metrics_json)
+            except json.JSONDecodeError:
+                metrics = None
+        return {
+            'ticker': row.ticker,
+            'analysis_type': row.analysis_type,
+            'model': row.model,
+            'markdown': row.markdown or '',
+            'structured': structured,
+            'metrics': metrics,
+            'created_at': row.created_at.isoformat() if row.created_at else None,
+            'updated_at': row.updated_at.isoformat() if row.updated_at else None,
+        }
+
+    def get_ai_analysis_cache(self, ticker: str, analysis_type: str) -> dict | None:
+        session = self.get_session()
+        try:
+            row = (
+                session.query(AiAnalysisCache)
+                .filter(
+                    AiAnalysisCache.ticker == ticker.upper().strip(),
+                    AiAnalysisCache.analysis_type == analysis_type,
+                )
+                .first()
+            )
+            if not row:
+                return None
+            return self._ai_cache_row_to_dict(row)
+        except Exception as e:
+            logger.error(f"Error fetching AI cache {ticker}/{analysis_type}: {e}")
+            return None
+        finally:
+            session.close()
+
+    def upsert_ai_analysis_cache(
+        self,
+        ticker: str,
+        analysis_type: str,
+        markdown: str,
+        model: str | None = None,
+        structured: dict | list | None = None,
+        metrics: dict | list | None = None,
+    ) -> dict | None:
+        session = self.get_session()
+        try:
+            ticker = ticker.upper().strip()
+            structured_json = json.dumps(structured) if structured is not None else None
+            metrics_json = json.dumps(metrics, default=str) if metrics is not None else None
+            row = (
+                session.query(AiAnalysisCache)
+                .filter(
+                    AiAnalysisCache.ticker == ticker,
+                    AiAnalysisCache.analysis_type == analysis_type,
+                )
+                .first()
+            )
+            if row:
+                row.markdown = markdown
+                row.model = model
+                row.structured_json = structured_json
+                row.metrics_json = metrics_json
+                row.updated_at = datetime.utcnow()
+            else:
+                row = AiAnalysisCache(
+                    ticker=ticker,
+                    analysis_type=analysis_type,
+                    model=model,
+                    markdown=markdown,
+                    structured_json=structured_json,
+                    metrics_json=metrics_json,
+                )
+                session.add(row)
+            session.commit()
+            session.refresh(row)
+            return self._ai_cache_row_to_dict(row)
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error saving AI cache {ticker}/{analysis_type}: {e}")
             return None
         finally:
             session.close()
