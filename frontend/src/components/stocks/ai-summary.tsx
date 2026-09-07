@@ -58,8 +58,11 @@ export function AiSummary({ symbol }: { symbol: string }) {
         )}
         {mutation.isError && (
           <p className="text-sm text-negative">
-            {mutation.error instanceof ApiError && mutation.error.status === 503
-              ? "Ollama is not running. Start it with `ollama serve` and try again."
+            {mutation.error instanceof ApiError
+              ? mutation.error.status === 503
+                ? mutation.error.message ||
+                  "Ollama is not running. Start it with `ollama serve` and try again."
+                : mutation.error.message
               : mutation.error instanceof Error
                 ? mutation.error.message
                 : "Failed to generate summary."}

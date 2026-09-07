@@ -14,6 +14,7 @@ import { ComprehensiveTable } from "@/components/stocks/comprehensive-table";
 import { TrendChart } from "@/components/stocks/trend-chart";
 import { EarningsChart } from "@/components/stocks/earnings-chart";
 import { AiSummary } from "@/components/stocks/ai-summary";
+import { WallStreetAnalysisPanel } from "@/components/stocks/wall-street-analysis";
 
 function LoadingState() {
   return (
@@ -76,6 +77,7 @@ export function StockDetail({ symbol }: { symbol: string }) {
           <MetricCards metrics={data.metrics} />
           <PriceChart symbol={symbol} />
           <AiSummary symbol={symbol} />
+          <WallStreetAnalysisPanel symbol={symbol} />
           {data.business_summary && (
             <Card>
               <CardHeader>

@@ -38,6 +38,38 @@ export interface SearchResult {
   type: string | null;
 }
 
+export interface WallStreetStructured {
+  overall_stance: "bullish" | "neutral" | "bearish";
+  confidence: "low" | "medium" | "high";
+  base_case_summary: string | null;
+  bull_case_summary: string | null;
+  bear_case_summary: string | null;
+}
+
+export interface WallStreetAnalysis {
+  symbol: string;
+  metrics: Record<string, unknown>;
+  markdown: string;
+  structured: WallStreetStructured | null;
+  model: string;
+  disclaimer: string;
+  cached?: boolean;
+  source?: "cache" | "live" | null;
+  updated_at?: string | null;
+}
+
+export interface WallStreetCacheLookup {
+  cached: boolean;
+  symbol: string;
+  source?: "cache" | "live" | null;
+  metrics?: Record<string, unknown>;
+  markdown?: string;
+  structured?: WallStreetStructured | null;
+  model?: string;
+  disclaimer?: string;
+  updated_at?: string | null;
+}
+
 export interface StockMetrics {
   current_price: number | null;
   daily_change_pct: number | null;
@@ -549,6 +581,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ symbol, point }),
     }),
+  aiWallStreet: (symbol: string, period = "1y", force = true) =>
+    request<WallStreetAnalysis>(`/api/ai/wall-street`, {
+      method: "POST",
+      body: JSON.stringify({ symbol, period, force }),
+    }),
+  aiWallStreetCache: (symbol: string) =>
+    request<WallStreetCacheLookup>(`/api/ai/wall-street/${encodeURIComponent(symbol)}`),
   adminIndustries: () =>
     request<{
       industries: Record<string, { symbol: string; company_name: string | null }[]>;
