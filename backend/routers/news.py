@@ -21,7 +21,7 @@ def news_feed(
 
 @router.get("/portfolio")
 def portfolio_news(db=Depends(get_db)):
-    symbols = db.get_portfolio() or []
+    symbols = db.get_all_portfolio_symbols() or db.get_portfolio() or []
     items = news_service.get_portfolio_news(symbols)
     return {"symbols": symbols, "items": items}
 

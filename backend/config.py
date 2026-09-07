@@ -32,8 +32,31 @@ TTL_SEARCH = 60 * 60
 TTL_NEWS = 15 * 60
 TTL_NEWS_PORTFOLIO = 5 * 60
 TTL_NEWS_CALENDAR = 60 * 60
+TTL_MARKET_CONTEXT = 5 * 60
+TTL_OPTIONS_CHAIN = 60
+TTL_OPTIONS_MONITOR = 60
 
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
+
+# Pre-trade analysis thresholds
+PRETRADE_DTE_GOOD_MIN = int(os.getenv("PRETRADE_DTE_GOOD_MIN", "30"))
+PRETRADE_DTE_GOOD_MAX = int(os.getenv("PRETRADE_DTE_GOOD_MAX", "45"))
+PRETRADE_DTE_CAUTION = int(os.getenv("PRETRADE_DTE_CAUTION", "14"))
+PRETRADE_ANNUALIZED_ROC_GOOD = float(os.getenv("PRETRADE_ANNUALIZED_ROC_GOOD", "20"))
+PRETRADE_OTM_PCT_GOOD = float(os.getenv("PRETRADE_OTM_PCT_GOOD", "5"))
+PRETRADE_OTM_PCT_CAUTION = float(os.getenv("PRETRADE_OTM_PCT_CAUTION", "2"))
+
+# CSP screening (Issue #2)
+CSP_DTE_MIN = int(os.getenv("CSP_DTE_MIN", "30"))
+CSP_DTE_MAX = int(os.getenv("CSP_DTE_MAX", "45"))
+CSP_TARGET_DELTA = float(os.getenv("CSP_TARGET_DELTA", "0.30"))
+CSP_EVENT_HORIZON_DAYS = int(os.getenv("CSP_EVENT_HORIZON_DAYS", "45"))
+CSP_OTM_PCT_GOOD = float(os.getenv("CSP_OTM_PCT_GOOD", "5"))
+CSP_IV_REALIZED_MIN_RATIO = float(os.getenv("CSP_IV_REALIZED_MIN_RATIO", "1.0"))
+CSP_SPREAD_PCT_MAX = float(os.getenv("CSP_SPREAD_PCT_MAX", "10"))
+CSP_MIN_OPEN_INTEREST = int(os.getenv("CSP_MIN_OPEN_INTEREST", "50"))
+CSP_BREACH_PCT = float(os.getenv("CSP_BREACH_PCT", "3"))
+CSP_RISK_FREE_RATE = float(os.getenv("CSP_RISK_FREE_RATE", "0.05"))
 
 # RSS feeds grouped by dashboard category. Add URLs here without code changes.
 NEWS_RSS_FEEDS: dict[str, list[tuple[str, str]]] = {

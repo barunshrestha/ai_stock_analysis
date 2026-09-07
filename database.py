@@ -1,6 +1,9 @@
 import os
 import pandas as pd
-from sqlalchemy import create_engine, Column, String, Float, DateTime, Integer, Text, UniqueConstraint
+import json
+
+from sqlalchemy import create_engine, Column, String, Float, DateTime, Integer, Text, UniqueConstraint, ForeignKey
+from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
@@ -86,24 +89,94 @@ class CashFlowStatement(Base):
     value = Column(Float)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class PortfolioBucket(Base):
+    """Named portfolio container (user can have multiple)."""
+    __tablename__ = 'portfolio_buckets'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(100), nullable=False, unique=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    holdings = relationship('Portfolio', back_populates='bucket', cascade='all, delete-orphan')
+
+
 class Portfolio(Base):
     __tablename__ = 'portfolio'
-    
+    __table_args__ = (UniqueConstraint('portfolio_id', 'symbol', name='uq_portfolio_bucket_symbol'),)
+
     id = Column(Integer, primary_key=True, autoincrement=True)
-    symbol = Column(String(10), nullable=False, unique=True)
+    portfolio_id = Column(Integer, ForeignKey('portfolio_buckets.id', ondelete='CASCADE'), nullable=False)
+    symbol = Column(String(10), nullable=False)
     added_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    bucket = relationship('PortfolioBucket', back_populates='holdings')
 
 
 class StockIndustry(Base):
     """Admin-managed stock-to-industry assignments. A stock can belong to multiple industries."""
-    __tablename__ = 'stock_industry'
     __table_args__ = (UniqueConstraint('symbol', 'industry', name='uq_stock_industry'),)
+    __tablename__ = 'stock_industry'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     symbol = Column(String(20), nullable=False)
     industry = Column(String(150), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class OptionsTrade(Base):
+    """Options trade journal entry (parent)."""
+    __tablename__ = 'options_trades'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    status = Column(String(20), nullable=False, default='open')
+    strategy_type = Column(String(40), nullable=False)
+    ticker = Column(String(10), nullable=False)
+    broker = Column(String(40))
+    executed_at = Column(DateTime, nullable=False)
+    expiration_date = Column(DateTime, nullable=False)
+    contracts = Column(Integer, nullable=False)
+    net_credit_debit = Column(Float, nullable=False)
+    collateral_required = Column(Float, nullable=False)
+    collateral_override = Column(Float)
+    notes = Column(Text)
+    metrics_json = Column(Text)
+    advisory_json = Column(Text)
+    closed_at = Column(DateTime)
+    close_net_per_contract = Column(Float)
+    realized_pnl = Column(Float)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    legs = relationship('OptionsLeg', back_populates='trade', cascade='all, delete-orphan')
+
+
+class OptionsLeg(Base):
+    """Individual leg of an options trade."""
+    __tablename__ = 'options_legs'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_id = Column(Integer, ForeignKey('options_trades.id', ondelete='CASCADE'), nullable=False)
+    leg_index = Column(Integer, nullable=False)
+    option_type = Column(String(10), nullable=False)
+    side = Column(String(20), nullable=False)
+    strike = Column(Float, nullable=False)
+    premium_per_contract = Column(Float, nullable=False)
+    expiration_date = Column(DateTime)
+
+    trade = relationship('OptionsTrade', back_populates='legs')
+
+
+class TickerAnalysisNote(Base):
+    """User analysis notes keyed by ticker + note type (e.g. liquidity)."""
+    __tablename__ = 'ticker_analysis_notes'
+    __table_args__ = (UniqueConstraint('ticker', 'note_key', name='uq_ticker_note_key'),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String(10), nullable=False)
+    note_key = Column(String(40), nullable=False)
+    content = Column(Text, nullable=False, default='')
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class DatabaseManager:
@@ -122,10 +195,61 @@ class DatabaseManager:
         """Create all database tables"""
         try:
             Base.metadata.create_all(bind=self.engine)
+            self._migrate_portfolio_buckets()
             logger.info("Database tables created successfully")
         except Exception as e:
             logger.error(f"Error creating database tables: {e}")
             raise
+
+    def _migrate_portfolio_buckets(self):
+        """Upgrade legacy single-portfolio schema to named portfolio buckets."""
+        from sqlalchemy import inspect, text
+
+        insp = inspect(self.engine)
+        if 'portfolio' not in insp.get_table_names():
+            return
+
+        cols = {c['name'] for c in insp.get_columns('portfolio')}
+        if 'portfolio_id' in cols:
+            return
+
+        logger.info("Migrating portfolio table to multi-portfolio schema…")
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS portfolio_buckets (
+                        id SERIAL PRIMARY KEY,
+                        name VARCHAR(100) NOT NULL UNIQUE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    )
+                    """
+                )
+            )
+            conn.execute(text("INSERT INTO portfolio_buckets (name) VALUES ('My Portfolio')"))
+            conn.execute(text("ALTER TABLE portfolio ADD COLUMN portfolio_id INTEGER"))
+            conn.execute(text("UPDATE portfolio SET portfolio_id = 1 WHERE portfolio_id IS NULL"))
+            conn.execute(text("ALTER TABLE portfolio ALTER COLUMN portfolio_id SET NOT NULL"))
+            conn.execute(
+                text(
+                    """
+                    ALTER TABLE portfolio
+                    ADD CONSTRAINT fk_portfolio_bucket
+                    FOREIGN KEY (portfolio_id) REFERENCES portfolio_buckets(id) ON DELETE CASCADE
+                    """
+                )
+            )
+            conn.execute(text("ALTER TABLE portfolio DROP CONSTRAINT IF EXISTS portfolio_symbol_key"))
+            conn.execute(
+                text(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_portfolio_bucket_symbol
+                    ON portfolio (portfolio_id, symbol)
+                    """
+                )
+            )
+        logger.info("Portfolio migration complete")
     
     def get_session(self):
         """Get a database session"""
@@ -742,21 +866,100 @@ class DatabaseManager:
         finally:
             session.close()
     
-    def add_to_portfolio(self, symbol):
-        """Add a stock symbol to the portfolio"""
+    def ensure_default_portfolio(self) -> int:
+        """Return default portfolio bucket id, creating 'My Portfolio' if needed."""
         session = self.get_session()
         try:
-            # Check if symbol already exists
-            existing = session.query(Portfolio).filter(Portfolio.symbol == symbol).first()
+            bucket = session.query(PortfolioBucket).order_by(PortfolioBucket.id).first()
+            if bucket:
+                return bucket.id
+            bucket = PortfolioBucket(name='My Portfolio')
+            session.add(bucket)
+            session.commit()
+            session.refresh(bucket)
+            return bucket.id
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error ensuring default portfolio: {e}")
+            return 1
+        finally:
+            session.close()
+
+    def list_portfolio_buckets(self) -> list[dict]:
+        session = self.get_session()
+        try:
+            buckets = session.query(PortfolioBucket).order_by(PortfolioBucket.created_at).all()
+            out = []
+            for b in buckets:
+                count = session.query(Portfolio).filter(Portfolio.portfolio_id == b.id).count()
+                out.append(
+                    {
+                        'id': b.id,
+                        'name': b.name,
+                        'symbol_count': count,
+                        'created_at': b.created_at.isoformat() if b.created_at else None,
+                    }
+                )
+            return out
+        except Exception as e:
+            logger.error(f"Error listing portfolios: {e}")
+            return []
+        finally:
+            session.close()
+
+    def create_portfolio_bucket(self, name: str) -> dict | None:
+        session = self.get_session()
+        try:
+            clean = name.strip()
+            if not clean:
+                return None
+            existing = session.query(PortfolioBucket).filter(PortfolioBucket.name == clean).first()
             if existing:
-                logger.info(f"{symbol} already exists in portfolio")
+                return None
+            bucket = PortfolioBucket(name=clean)
+            session.add(bucket)
+            session.commit()
+            session.refresh(bucket)
+            return {'id': bucket.id, 'name': bucket.name, 'symbol_count': 0}
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error creating portfolio '{name}': {e}")
+            return None
+        finally:
+            session.close()
+
+    def get_portfolio_bucket(self, portfolio_id: int) -> dict | None:
+        session = self.get_session()
+        try:
+            bucket = session.query(PortfolioBucket).filter(PortfolioBucket.id == portfolio_id).first()
+            if not bucket:
+                return None
+            count = session.query(Portfolio).filter(Portfolio.portfolio_id == portfolio_id).count()
+            return {'id': bucket.id, 'name': bucket.name, 'symbol_count': count}
+        except Exception as e:
+            logger.error(f"Error fetching portfolio bucket {portfolio_id}: {e}")
+            return None
+        finally:
+            session.close()
+
+    def add_to_portfolio(self, symbol, portfolio_id: int | None = None):
+        """Add a stock symbol to a portfolio bucket"""
+        portfolio_id = portfolio_id or self.ensure_default_portfolio()
+        session = self.get_session()
+        try:
+            existing = (
+                session.query(Portfolio)
+                .filter(Portfolio.portfolio_id == portfolio_id, Portfolio.symbol == symbol)
+                .first()
+            )
+            if existing:
+                logger.info(f"{symbol} already exists in portfolio {portfolio_id}")
                 return True
-            
-            # Add new symbol
-            portfolio_item = Portfolio(symbol=symbol)
+
+            portfolio_item = Portfolio(portfolio_id=portfolio_id, symbol=symbol)
             session.add(portfolio_item)
             session.commit()
-            logger.info(f"Added {symbol} to portfolio")
+            logger.info(f"Added {symbol} to portfolio {portfolio_id}")
             return True
         except Exception as e:
             session.rollback()
@@ -764,50 +967,71 @@ class DatabaseManager:
             return False
         finally:
             session.close()
-    
-    def remove_from_portfolio(self, symbol):
-        """Remove a stock symbol from the portfolio"""
+
+    def remove_from_portfolio(self, symbol, portfolio_id: int | None = None):
+        """Remove a stock symbol from a portfolio bucket"""
+        portfolio_id = portfolio_id or self.ensure_default_portfolio()
         session = self.get_session()
         try:
-            session.query(Portfolio).filter(Portfolio.symbol == symbol).delete()
+            deleted = (
+                session.query(Portfolio)
+                .filter(Portfolio.portfolio_id == portfolio_id, Portfolio.symbol == symbol)
+                .delete()
+            )
             session.commit()
-            logger.info(f"Removed {symbol} from portfolio")
-            return True
+            if deleted:
+                logger.info(f"Removed {symbol} from portfolio {portfolio_id}")
+                return True
+            return False
         except Exception as e:
             session.rollback()
             logger.error(f"Error removing {symbol} from portfolio: {e}")
             return False
         finally:
             session.close()
-    
-    def get_portfolio(self):
-        """Retrieve all stock symbols in the portfolio"""
+
+    def get_portfolio(self, portfolio_id: int | None = None):
+        """Retrieve all stock symbols in a portfolio bucket"""
+        portfolio_id = portfolio_id or self.ensure_default_portfolio()
         session = self.get_session()
         try:
-            records = session.query(Portfolio).order_by(Portfolio.added_at).all()
+            records = (
+                session.query(Portfolio)
+                .filter(Portfolio.portfolio_id == portfolio_id)
+                .order_by(Portfolio.added_at)
+                .all()
+            )
             symbols = [record.symbol for record in records]
-            logger.info(f"Retrieved {len(symbols)} symbols from portfolio")
+            logger.info(f"Retrieved {len(symbols)} symbols from portfolio {portfolio_id}")
             return symbols
         except Exception as e:
             logger.error(f"Error retrieving portfolio: {e}")
             return []
         finally:
             session.close()
-    
-    def save_portfolio(self, symbols):
-        """Replace entire portfolio with new list of symbols"""
+
+    def get_all_portfolio_symbols(self) -> list[str]:
+        """All unique symbols across every portfolio bucket."""
         session = self.get_session()
         try:
-            # Clear existing portfolio
-            session.query(Portfolio).delete()
-            
-            # Add all symbols
+            rows = session.query(Portfolio.symbol).distinct().order_by(Portfolio.symbol).all()
+            return [r[0] for r in rows]
+        except Exception as e:
+            logger.error(f"Error retrieving all portfolio symbols: {e}")
+            return []
+        finally:
+            session.close()
+
+    def save_portfolio(self, symbols, portfolio_id: int | None = None):
+        """Replace holdings in a portfolio bucket"""
+        portfolio_id = portfolio_id or self.ensure_default_portfolio()
+        session = self.get_session()
+        try:
+            session.query(Portfolio).filter(Portfolio.portfolio_id == portfolio_id).delete()
             for symbol in symbols:
-                portfolio_item = Portfolio(symbol=symbol)
-                session.add(portfolio_item)
-            
+                session.add(Portfolio(portfolio_id=portfolio_id, symbol=symbol))
             session.commit()
-            logger.info(f"Saved portfolio with {len(symbols)} symbols")
+            logger.info(f"Saved portfolio {portfolio_id} with {len(symbols)} symbols")
             return True
         except Exception as e:
             session.rollback()
@@ -815,3 +1039,212 @@ class DatabaseManager:
             return False
         finally:
             session.close()
+
+    # --- Options trade journal ---
+
+    def create_options_trade(self, trade_data: dict, legs: list[dict]) -> dict | None:
+        session = self.get_session()
+        try:
+            trade = OptionsTrade(**trade_data)
+            session.add(trade)
+            session.flush()
+            for leg in legs:
+                session.add(OptionsLeg(trade_id=trade.id, **leg))
+            session.commit()
+            session.refresh(trade)
+            return self._options_trade_to_dict(trade, session)
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error creating options trade: {e}")
+            return None
+        finally:
+            session.close()
+
+    def get_options_trade(self, trade_id: int) -> dict | None:
+        session = self.get_session()
+        try:
+            trade = session.query(OptionsTrade).filter(OptionsTrade.id == trade_id).first()
+            if not trade:
+                return None
+            return self._options_trade_to_dict(trade, session)
+        except Exception as e:
+            logger.error(f"Error fetching options trade {trade_id}: {e}")
+            return None
+        finally:
+            session.close()
+
+    def list_options_trades(self, status: str | None = None, ticker: str | None = None) -> list[dict]:
+        session = self.get_session()
+        try:
+            q = session.query(OptionsTrade).order_by(OptionsTrade.executed_at.desc())
+            if status:
+                q = q.filter(OptionsTrade.status == status)
+            if ticker:
+                q = q.filter(OptionsTrade.ticker == ticker.upper())
+            trades = q.all()
+            return [self._options_trade_to_dict(t, session) for t in trades]
+        except Exception as e:
+            logger.error(f"Error listing options trades: {e}")
+            return []
+        finally:
+            session.close()
+
+    def update_options_trade(self, trade_id: int, trade_data: dict, legs: list[dict] | None = None) -> dict | None:
+        session = self.get_session()
+        try:
+            trade = session.query(OptionsTrade).filter(OptionsTrade.id == trade_id).first()
+            if not trade:
+                return None
+            if trade.status != 'open':
+                return None
+            for key, val in trade_data.items():
+                setattr(trade, key, val)
+            trade.updated_at = datetime.utcnow()
+            if legs is not None:
+                session.query(OptionsLeg).filter(OptionsLeg.trade_id == trade_id).delete()
+                for leg in legs:
+                    session.add(OptionsLeg(trade_id=trade_id, **leg))
+            session.commit()
+            session.refresh(trade)
+            return self._options_trade_to_dict(trade, session)
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error updating options trade {trade_id}: {e}")
+            return None
+        finally:
+            session.close()
+
+    def close_options_trade(self, trade_id: int, close_data: dict) -> dict | None:
+        session = self.get_session()
+        try:
+            trade = session.query(OptionsTrade).filter(OptionsTrade.id == trade_id).first()
+            if not trade or trade.status != 'open':
+                return None
+            for key, val in close_data.items():
+                setattr(trade, key, val)
+            trade.updated_at = datetime.utcnow()
+            session.commit()
+            session.refresh(trade)
+            return self._options_trade_to_dict(trade, session)
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error closing options trade {trade_id}: {e}")
+            return None
+        finally:
+            session.close()
+
+    def delete_options_trade(self, trade_id: int) -> bool:
+        session = self.get_session()
+        try:
+            trade = session.query(OptionsTrade).filter(OptionsTrade.id == trade_id).first()
+            if not trade:
+                return False
+            session.delete(trade)
+            session.commit()
+            return True
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error deleting options trade {trade_id}: {e}")
+            return False
+        finally:
+            session.close()
+
+    @staticmethod
+    def _options_trade_to_dict(trade: OptionsTrade, session) -> dict:
+        legs = (
+            session.query(OptionsLeg)
+            .filter(OptionsLeg.trade_id == trade.id)
+            .order_by(OptionsLeg.leg_index)
+            .all()
+        )
+        return {
+            'id': trade.id,
+            'status': trade.status,
+            'strategy_type': trade.strategy_type,
+            'ticker': trade.ticker,
+            'broker': trade.broker,
+            'executed_at': trade.executed_at.isoformat() if trade.executed_at else None,
+            'expiration_date': trade.expiration_date.date().isoformat() if trade.expiration_date else None,
+            'contracts': trade.contracts,
+            'net_credit_debit': trade.net_credit_debit,
+            'collateral_required': trade.collateral_required,
+            'collateral_override': trade.collateral_override,
+            'notes': trade.notes,
+            'metrics': json.loads(trade.metrics_json) if trade.metrics_json else {},
+            'advisory': json.loads(trade.advisory_json) if trade.advisory_json else {},
+            'closed_at': trade.closed_at.isoformat() if trade.closed_at else None,
+            'close_net_per_contract': trade.close_net_per_contract,
+            'realized_pnl': trade.realized_pnl,
+            'created_at': trade.created_at.isoformat() if trade.created_at else None,
+            'updated_at': trade.updated_at.isoformat() if trade.updated_at else None,
+            'legs': [
+                {
+                    'leg_index': leg.leg_index,
+                    'option_type': leg.option_type,
+                    'side': leg.side,
+                    'strike': leg.strike,
+                    'premium_per_contract': leg.premium_per_contract,
+                    'expiration_date': leg.expiration_date.date().isoformat() if leg.expiration_date else None,
+                }
+                for leg in legs
+            ],
+        }
+
+    def get_ticker_analysis_note(self, ticker: str, note_key: str) -> dict | None:
+        session = self.get_session()
+        try:
+            row = (
+                session.query(TickerAnalysisNote)
+                .filter(
+                    TickerAnalysisNote.ticker == ticker.upper(),
+                    TickerAnalysisNote.note_key == note_key,
+                )
+                .first()
+            )
+            if not row:
+                return None
+            return {
+                'ticker': row.ticker,
+                'note_key': row.note_key,
+                'content': row.content or '',
+                'updated_at': row.updated_at.isoformat() if row.updated_at else None,
+            }
+        except Exception as e:
+            logger.error(f"Error fetching ticker note {ticker}/{note_key}: {e}")
+            return None
+        finally:
+            session.close()
+
+    def upsert_ticker_analysis_note(self, ticker: str, note_key: str, content: str) -> dict | None:
+        session = self.get_session()
+        try:
+            ticker = ticker.upper().strip()
+            row = (
+                session.query(TickerAnalysisNote)
+                .filter(
+                    TickerAnalysisNote.ticker == ticker,
+                    TickerAnalysisNote.note_key == note_key,
+                )
+                .first()
+            )
+            if row:
+                row.content = content
+                row.updated_at = datetime.utcnow()
+            else:
+                row = TickerAnalysisNote(ticker=ticker, note_key=note_key, content=content)
+                session.add(row)
+            session.commit()
+            session.refresh(row)
+            return {
+                'ticker': row.ticker,
+                'note_key': row.note_key,
+                'content': row.content or '',
+                'updated_at': row.updated_at.isoformat() if row.updated_at else None,
+            }
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error saving ticker note {ticker}/{note_key}: {e}")
+            return None
+        finally:
+            session.close()
+
