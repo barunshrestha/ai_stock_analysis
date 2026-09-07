@@ -38,6 +38,23 @@ export interface SearchResult {
   type: string | null;
 }
 
+export interface WallStreetStructured {
+  overall_stance: "bullish" | "neutral" | "bearish";
+  confidence: "low" | "medium" | "high";
+  base_case_summary: string | null;
+  bull_case_summary: string | null;
+  bear_case_summary: string | null;
+}
+
+export interface WallStreetAnalysis {
+  symbol: string;
+  metrics: Record<string, unknown>;
+  markdown: string;
+  structured: WallStreetStructured | null;
+  model: string;
+  disclaimer: string;
+}
+
 export interface StockMetrics {
   current_price: number | null;
   daily_change_pct: number | null;
@@ -548,6 +565,11 @@ export const api = {
     request<{ symbol: string; point: number; content: string }>(`/api/ai/point`, {
       method: "POST",
       body: JSON.stringify({ symbol, point }),
+    }),
+  aiWallStreet: (symbol: string, period = "1y") =>
+    request<WallStreetAnalysis>(`/api/ai/wall-street`, {
+      method: "POST",
+      body: JSON.stringify({ symbol, period }),
     }),
   adminIndustries: () =>
     request<{

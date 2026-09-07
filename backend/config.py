@@ -9,8 +9,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma3:4b")
-OLLAMA_ANALYSIS_MODEL = os.getenv("OLLAMA_ANALYSIS_MODEL", "gemma3:4b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "deepseek-r1:latest")
+OLLAMA_ANALYSIS_MODEL = os.getenv("OLLAMA_ANALYSIS_MODEL", "deepseek-r1:latest")
+# Keep context modest — default Ollama num_ctx can be huge and stalls CPU inference.
+OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
 
 # Next.js dev servers; extend via CORS_ORIGINS env (comma-separated) for prod.
 # 3002 is the pinned frontend dev port (3000/3001 are taken on this machine).
@@ -37,6 +39,10 @@ TTL_OPTIONS_CHAIN = 60
 TTL_OPTIONS_MONITOR = 60
 
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
+
+# Gemini (Issue #6 Wall Street–style research memo)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
 # Pre-trade analysis thresholds
 PRETRADE_DTE_GOOD_MIN = int(os.getenv("PRETRADE_DTE_GOOD_MIN", "30"))

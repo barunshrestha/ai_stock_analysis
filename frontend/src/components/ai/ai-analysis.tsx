@@ -18,10 +18,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TrendChart } from "@/components/stocks/trend-chart";
+import { WallStreetAnalysisPanel } from "@/components/stocks/wall-street-analysis";
 
 function ollamaErrorMessage(error: unknown): string {
   if (error instanceof ApiError && error.status === 503) {
-    return "Ollama is not running. Start it with `ollama serve` and try again.";
+    return error.message || "Ollama is not running. Start it with `ollama serve` and try again.";
   }
   return error instanceof Error ? error.message : "Analysis failed.";
 }
@@ -177,6 +178,8 @@ export function AiAnalysis({ symbol }: { symbol: string }) {
 
       <TrendCard symbol={symbol} />
       <TrendChart symbol={symbol} />
+
+      <WallStreetAnalysisPanel symbol={symbol} />
 
       <div>
         <h2 className="mb-1 text-lg font-semibold">15-Point Analysis</h2>

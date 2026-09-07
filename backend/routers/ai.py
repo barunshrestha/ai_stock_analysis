@@ -1,11 +1,12 @@
-"""Ollama AI endpoints: 4-section summary and 15-point analysis."""
+"""AI endpoints: Ollama summary/points and Gemini Wall Street memo (Issue #6)."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.services import ollama_service, stock_service
+from backend.config import GEMINI_MODEL
+from backend.services import gemini_service, ollama_service, research_metrics_service, stock_service
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -18,6 +19,11 @@ class SummaryRequest(BaseModel):
 class PointRequest(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=12)
     point: int = Field(..., ge=1, le=15)
+    period: str = "1y"
+
+
+class WallStreetRequest(BaseModel):
+    symbol: str = Field(..., min_length=1, max_length=12)
     period: str = "1y"
 
 
@@ -74,3 +80,30 @@ def ai_point(req: PointRequest):
     if error:
         raise HTTPException(status_code=503, detail=error)
     return {"symbol": symbol, "point": req.point, "content": content}
+
+
+@router.post("/wall-street")
+def wall_street_analysis(req: WallStreetRequest):
+    """Issue #6: yFinance metrics pack + Gemini research memo."""
+    symbol = req.symbol.strip().upper()
+    try:
+        metrics = research_metrics_service.build_research_metrics(symbol, req.period)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch data for {symbol}: {exc}")
+
+    markdown, structured, error = gemini_service.generate_wall_street_memo(metrics)
+    if error:
+        raise HTTPException(status_code=503, detail=error)
+
+    return {
+        "symbol": symbol,
+        "metrics": metrics,
+        "markdown": markdown,
+        "structured": structured,
+        "model": GEMINI_MODEL,
+        "disclaimer": gemini_service.DISCLAIMER,
+    }

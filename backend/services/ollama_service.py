@@ -7,13 +7,14 @@ moved from inside Streamlit to a plain service callable by FastAPI routes.
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 
 import numpy as np
 import pandas as pd
 
-from backend.config import OLLAMA_ANALYSIS_MODEL, OLLAMA_BASE_URL, OLLAMA_MODEL
+from backend.config import OLLAMA_ANALYSIS_MODEL, OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_NUM_CTX
 
 ANALYSIS_POINTS = [
     (1, "What the company actually does", "Explain the core business, products/services, customers, and business model in simple terms."),
@@ -50,18 +51,33 @@ def call_ollama(
             {"role": "user", "content": user_prompt},
         ],
         "stream": False,
-        "options": {"temperature": temperature, "num_predict": max_tokens},
+        "options": {
+            "temperature": temperature,
+            "num_predict": max_tokens,
+            "num_ctx": OLLAMA_NUM_CTX,
+        },
     }
     try:
         req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST")
         req.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=300) as resp:
             data = json.loads(resp.read().decode())
             if data.get("error"):
                 return None, f"Ollama error: {data.get('error')}"
-            content = (data.get("message") or {}).get("content")
+            message = data.get("message") or {}
+            content = message.get("content") or ""
+            # DeepSeek-R1 / reasoning models may put text in thinking or <think> tags.
+            thinking = message.get("thinking") or ""
+            if not str(content).strip() and thinking:
+                content = thinking
+            content = _strip_think_tags(str(content)).strip()
             if not content:
-                return None, f"Ollama response missing message content: {str(data)[:300]}"
+                return (
+                    None,
+                    "Ollama returned empty content. The model may still be loading or "
+                    f"timed out internally (model={payload['model']}). Try again, or use "
+                    "a smaller tag like deepseek-r1:1.5b.",
+                )
             return content, None
     except urllib.error.HTTPError as e:
         try:
@@ -71,8 +87,20 @@ def call_ollama(
         return None, f"Ollama HTTP {e.code}: {body}"
     except urllib.error.URLError as e:
         return None, f"Cannot reach Ollama at {OLLAMA_BASE_URL}: {str(e.reason)}"
+    except TimeoutError:
+        return (
+            None,
+            f"Ollama timed out after 300s using model '{model or OLLAMA_MODEL}'. "
+            "CPU inference is slow — try deepseek-r1:1.5b or enable GPU.",
+        )
     except Exception as e:
         return None, f"Ollama request failed: {str(e)}"
+
+
+def _strip_think_tags(text: str) -> str:
+    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"</?think>", "", cleaned, flags=re.IGNORECASE)
+    return cleaned
 
 
 def _earnings_trend(earnings_data: pd.DataFrame | None) -> str:
