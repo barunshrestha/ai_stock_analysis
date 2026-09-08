@@ -70,6 +70,37 @@ export interface WallStreetCacheLookup {
   updated_at?: string | null;
 }
 
+export interface MoatStructured {
+  moat_score: number;
+  confidence: "low" | "medium" | "high";
+  strongest_pillar: "brand" | "network" | "switching" | "cost" | "ip" | "none";
+  summary: string | null;
+}
+
+export interface MoatAnalysis {
+  symbol: string;
+  metrics: Record<string, unknown>;
+  markdown: string;
+  structured: MoatStructured | null;
+  model: string;
+  disclaimer: string;
+  cached?: boolean;
+  source?: "cache" | "live" | null;
+  updated_at?: string | null;
+}
+
+export interface MoatCacheLookup {
+  cached: boolean;
+  symbol: string;
+  source?: "cache" | "live" | null;
+  metrics?: Record<string, unknown>;
+  markdown?: string;
+  structured?: MoatStructured | null;
+  model?: string;
+  disclaimer?: string;
+  updated_at?: string | null;
+}
+
 export interface StockMetrics {
   current_price: number | null;
   daily_change_pct: number | null;
@@ -588,6 +619,13 @@ export const api = {
     }),
   aiWallStreetCache: (symbol: string) =>
     request<WallStreetCacheLookup>(`/api/ai/wall-street/${encodeURIComponent(symbol)}`),
+  aiMoat: (symbol: string, period = "1y", force = true) =>
+    request<MoatAnalysis>(`/api/ai/moat`, {
+      method: "POST",
+      body: JSON.stringify({ symbol, period, force }),
+    }),
+  aiMoatCache: (symbol: string) =>
+    request<MoatCacheLookup>(`/api/ai/moat/${encodeURIComponent(symbol)}`),
   adminIndustries: () =>
     request<{
       industries: Record<string, { symbol: string; company_name: string | null }[]>;

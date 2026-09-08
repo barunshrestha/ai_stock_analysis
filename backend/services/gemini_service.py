@@ -140,3 +140,95 @@ def generate_wall_street_memo(metrics: dict) -> tuple[str | None, dict | None, s
     if not markdown:
         return None, None, "Gemini returned no usable markdown memo."
     return markdown, structured, None
+
+
+SYSTEM_PROMPT_MOAT = """You are a senior equity strategist specializing in competitive moats.
+Write a clear moat assessment in simple language with professional insights.
+
+Hard rules:
+- Use ONLY the metrics and facts provided in the user message.
+- Never invent patents, brand rankings, market shares, or competitor facts not supported by the context.
+- If peer comps are missing, compare qualitatively using sector/industry labels and state that competitor data is unavailable.
+- This is educational / journaling content, not personalized investment advice.
+
+Cover these sections in order, using markdown headings:
+1. Brand strength
+2. Network effects
+3. Switching costs
+4. Cost advantage
+5. Patents or proprietary tech
+6. Competitor comparison
+7. Overall moat rating (1–10) with rationale
+
+After the markdown memo, end with a single fenced JSON block (and nothing after it) in this exact shape:
+```json
+{
+  "moat_score": 1-10,
+  "confidence": "low" | "medium" | "high",
+  "strongest_pillar": "brand" | "network" | "switching" | "cost" | "ip" | "none",
+  "summary": "one short sentence"
+}
+```
+"""
+
+_MOAT_PILLARS = frozenset({"brand", "network", "switching", "cost", "ip", "none"})
+
+
+def parse_moat_response(raw: str) -> tuple[str, dict | None]:
+    """Split moat markdown from trailing JSON; clamp moat_score to 1–10."""
+    if not raw or not raw.strip():
+        return "", None
+
+    matches = list(_JSON_FENCE_RE.finditer(raw))
+    structured: dict | None = None
+    markdown = raw.strip()
+
+    if matches:
+        last = matches[-1]
+        try:
+            parsed = json.loads(last.group(1))
+            if isinstance(parsed, dict):
+                structured = _normalize_moat_structured(parsed)
+        except json.JSONDecodeError:
+            structured = None
+        markdown = (raw[: last.start()] + raw[last.end() :]).strip()
+
+    return markdown, structured
+
+
+def _normalize_moat_structured(data: dict[str, Any]) -> dict:
+    confidence = str(data.get("confidence") or "medium").lower()
+    if confidence not in ("low", "medium", "high"):
+        confidence = "medium"
+    pillar = str(data.get("strongest_pillar") or "none").lower().strip()
+    if pillar not in _MOAT_PILLARS:
+        pillar = "none"
+    score_raw = data.get("moat_score")
+    try:
+        score = int(round(float(score_raw)))
+    except (TypeError, ValueError):
+        score = 5
+    score = max(1, min(10, score))
+    return {
+        "moat_score": score,
+        "confidence": confidence,
+        "strongest_pillar": pillar,
+        "summary": str(data.get("summary") or "").strip() or None,
+    }
+
+
+def generate_moat_memo(metrics: dict) -> tuple[str | None, dict | None, str | None]:
+    """Ground Gemini on metrics for Issue #8 moat analysis. Returns (markdown, structured, error)."""
+    symbol = (metrics.get("identity") or {}).get("symbol") or "UNKNOWN"
+    user_prompt = (
+        f"Evaluate the competitive moat of {symbol} using ONLY this structured context JSON.\n\n"
+        f"```json\n{json.dumps(metrics, default=str, indent=2)}\n```\n\n"
+        "Produce the moat memo and trailing JSON score as instructed."
+    )
+    content, error = call_gemini(SYSTEM_PROMPT_MOAT, user_prompt)
+    if error:
+        return None, None, error
+    markdown, structured = parse_moat_response(content or "")
+    if not markdown:
+        return None, None, "Gemini returned no usable moat memo."
+    return markdown, structured, None
