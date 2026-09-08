@@ -21,6 +21,12 @@ import { TrendChart } from "@/components/stocks/trend-chart";
 import { WallStreetAnalysisPanel } from "@/components/stocks/wall-street-analysis";
 import { MoatAnalysisPanel } from "@/components/stocks/moat-analysis";
 import { ValuationAnalysisPanel } from "@/components/stocks/valuation-analysis";
+import { RiskAnalysisPanel } from "@/components/stocks/risk-analysis";
+import { GrowthPotentialPanel } from "@/components/stocks/growth-analysis";
+import { InstitutionalPerspectivePanel } from "@/components/stocks/institutional-analysis";
+import { BullBearDebatePanel } from "@/components/stocks/debate-analysis";
+import { EarningsBreakdownPanel } from "@/components/stocks/earnings-analysis";
+import { BuyVerdictPanel } from "@/components/stocks/buy-verdict-analysis";
 
 function ollamaErrorMessage(error: unknown): string {
   if (error instanceof ApiError && error.status === 503) {
@@ -184,6 +190,12 @@ export function AiAnalysis({ symbol }: { symbol: string }) {
       <WallStreetAnalysisPanel symbol={symbol} />
       <MoatAnalysisPanel symbol={symbol} />
       <ValuationAnalysisPanel symbol={symbol} />
+      <RiskAnalysisPanel symbol={symbol} />
+      <GrowthPotentialPanel symbol={symbol} />
+      <InstitutionalPerspectivePanel symbol={symbol} />
+      <BullBearDebatePanel symbol={symbol} />
+      <EarningsBreakdownPanel symbol={symbol} />
+      <BuyVerdictPanel symbol={symbol} />
 
       <div>
         <h2 className="mb-1 text-lg font-semibold">15-Point Analysis</h2>

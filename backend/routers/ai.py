@@ -20,6 +20,12 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 WALL_STREET_ANALYSIS_TYPE = "wall_street"
 MOAT_ANALYSIS_TYPE = "moat"
 VALUATION_ANALYSIS_TYPE = "valuation"
+RISK_ANALYSIS_TYPE = "risk"
+GROWTH_ANALYSIS_TYPE = "growth"
+INSTITUTIONAL_ANALYSIS_TYPE = "institutional"
+DEBATE_ANALYSIS_TYPE = "debate"
+EARNINGS_ANALYSIS_TYPE = "earnings"
+VERDICT_ANALYSIS_TYPE = "verdict"
 
 
 class SummaryRequest(BaseModel):
@@ -46,6 +52,42 @@ class MoatRequest(BaseModel):
 
 
 class ValuationRequest(BaseModel):
+    symbol: str = Field(..., min_length=1, max_length=12)
+    period: str = "1y"
+    force: bool = True
+
+
+class RiskRequest(BaseModel):
+    symbol: str = Field(..., min_length=1, max_length=12)
+    period: str = "1y"
+    force: bool = True
+
+
+class GrowthRequest(BaseModel):
+    symbol: str = Field(..., min_length=1, max_length=12)
+    period: str = "1y"
+    force: bool = True
+
+
+class InstitutionalRequest(BaseModel):
+    symbol: str = Field(..., min_length=1, max_length=12)
+    period: str = "1y"
+    force: bool = True
+
+
+class DebateRequest(BaseModel):
+    symbol: str = Field(..., min_length=1, max_length=12)
+    period: str = "1y"
+    force: bool = True
+
+
+class EarningsRequest(BaseModel):
+    symbol: str = Field(..., min_length=1, max_length=12)
+    period: str = "1y"
+    force: bool = True
+
+
+class VerdictRequest(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=12)
     period: str = "1y"
     force: bool = True
@@ -314,3 +356,176 @@ def valuation_analysis(req: ValuationRequest, db=Depends(get_db)):
         updated_at=updated_at,
         cached=False,
     )
+
+
+def _live_memo_route(
+    *,
+    symbol: str,
+    period: str,
+    analysis_type: str,
+    generate_fn,
+    db,
+    enrich=None,
+):
+    try:
+        metrics = research_metrics_service.build_research_metrics(symbol, period)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch data for {symbol}: {exc}")
+
+    if enrich is not None:
+        metrics = enrich(symbol, metrics)
+
+    markdown, structured, error = generate_fn(metrics)
+    if error:
+        raise HTTPException(status_code=503, detail=error)
+
+    saved = db.upsert_ai_analysis_cache(
+        ticker=symbol,
+        analysis_type=analysis_type,
+        markdown=markdown or "",
+        model=GEMINI_MODEL,
+        structured=structured,
+        metrics=metrics,
+    )
+    updated_at = saved.get("updated_at") if saved else None
+    return _ai_memo_payload(
+        symbol=symbol,
+        markdown=markdown or "",
+        structured=structured,
+        metrics=metrics,
+        model=GEMINI_MODEL,
+        source="live",
+        updated_at=updated_at,
+        cached=False,
+    )
+
+
+def _cached_memo_route(ticker: str, analysis_type: str, db):
+    symbol = ticker.strip().upper()
+    if not symbol:
+        raise HTTPException(status_code=422, detail="Ticker is required.")
+    row = db.get_ai_analysis_cache(symbol, analysis_type)
+    if not row:
+        return {"cached": False, "symbol": symbol, "source": None}
+    return _ai_memo_payload(
+        symbol=symbol,
+        markdown=row.get("markdown") or "",
+        structured=row.get("structured"),
+        metrics=row.get("metrics"),
+        model=row.get("model"),
+        source="cache",
+        updated_at=row.get("updated_at"),
+        cached=True,
+    )
+
+
+@router.get("/risk/{ticker}")
+def get_risk_cache(ticker: str, db=Depends(get_db)):
+    return _cached_memo_route(ticker, RISK_ANALYSIS_TYPE, db)
+
+
+@router.post("/risk")
+def risk_analysis(req: RiskRequest, db=Depends(get_db)):
+    """Issue #10: ranked risk memo via Gemini (always live; upserts cache)."""
+    return _live_memo_route(
+        symbol=req.symbol.strip().upper(),
+        period=req.period,
+        analysis_type=RISK_ANALYSIS_TYPE,
+        generate_fn=gemini_service.generate_risk_memo,
+        db=db,
+    )
+
+
+@router.get("/growth/{ticker}")
+def get_growth_cache(ticker: str, db=Depends(get_db)):
+    return _cached_memo_route(ticker, GROWTH_ANALYSIS_TYPE, db)
+
+
+@router.post("/growth")
+def growth_analysis(req: GrowthRequest, db=Depends(get_db)):
+    """Issue #11: growth potential memo via Gemini (always live; upserts cache)."""
+    return _live_memo_route(
+        symbol=req.symbol.strip().upper(),
+        period=req.period,
+        analysis_type=GROWTH_ANALYSIS_TYPE,
+        generate_fn=gemini_service.generate_growth_memo,
+        db=db,
+    )
+
+
+@router.get("/institutional/{ticker}")
+def get_institutional_cache(ticker: str, db=Depends(get_db)):
+    return _cached_memo_route(ticker, INSTITUTIONAL_ANALYSIS_TYPE, db)
+
+
+@router.post("/institutional")
+def institutional_analysis(req: InstitutionalRequest, db=Depends(get_db)):
+    """Issue #12: institutional PM perspective via Gemini (always live; upserts cache)."""
+    return _live_memo_route(
+        symbol=req.symbol.strip().upper(),
+        period=req.period,
+        analysis_type=INSTITUTIONAL_ANALYSIS_TYPE,
+        generate_fn=gemini_service.generate_institutional_memo,
+        db=db,
+    )
+
+
+@router.get("/debate/{ticker}")
+def get_debate_cache(ticker: str, db=Depends(get_db)):
+    return _cached_memo_route(ticker, DEBATE_ANALYSIS_TYPE, db)
+
+
+@router.post("/debate")
+def debate_analysis(req: DebateRequest, db=Depends(get_db)):
+    """Issue #13: bull vs bear debate via Gemini (always live; upserts cache)."""
+    return _live_memo_route(
+        symbol=req.symbol.strip().upper(),
+        period=req.period,
+        analysis_type=DEBATE_ANALYSIS_TYPE,
+        generate_fn=gemini_service.generate_debate_memo,
+        db=db,
+    )
+
+
+def _enrich_earnings(symbol: str, metrics: dict) -> dict:
+    return {**metrics, "earnings_context": research_metrics_service.build_earnings_context(symbol)}
+
+
+@router.get("/earnings/{ticker}")
+def get_earnings_cache(ticker: str, db=Depends(get_db)):
+    return _cached_memo_route(ticker, EARNINGS_ANALYSIS_TYPE, db)
+
+
+@router.post("/earnings")
+def earnings_analysis(req: EarningsRequest, db=Depends(get_db)):
+    """Issue #14: earnings report breakdown via Gemini (always live; upserts cache)."""
+    return _live_memo_route(
+        symbol=req.symbol.strip().upper(),
+        period=req.period,
+        analysis_type=EARNINGS_ANALYSIS_TYPE,
+        generate_fn=gemini_service.generate_earnings_memo,
+        db=db,
+        enrich=_enrich_earnings,
+    )
+
+
+@router.get("/verdict/{ticker}")
+def get_verdict_cache(ticker: str, db=Depends(get_db)):
+    return _cached_memo_route(ticker, VERDICT_ANALYSIS_TYPE, db)
+
+
+@router.post("/verdict")
+def verdict_analysis(req: VerdictRequest, db=Depends(get_db)):
+    """Issue #15: Buy/Hold/Avoid journal verdict via Gemini (always live; upserts cache)."""
+    return _live_memo_route(
+        symbol=req.symbol.strip().upper(),
+        period=req.period,
+        analysis_type=VERDICT_ANALYSIS_TYPE,
+        generate_fn=gemini_service.generate_verdict_memo,
+        db=db,
+    )
+

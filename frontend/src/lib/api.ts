@@ -132,6 +132,184 @@ export interface ValuationCacheLookup {
   updated_at?: string | null;
 }
 
+
+export interface RiskRankedItem {
+  rank: number;
+  category: "economic" | "disruption" | "competition" | "regulatory" | "financial" | "other";
+  title: string;
+  severity: "low" | "medium" | "high";
+}
+export interface RiskStructured {
+  overall_risk: "low" | "medium" | "high";
+  confidence: "low" | "medium" | "high";
+  ranked_risks: RiskRankedItem[];
+  summary: string | null;
+}
+export interface RiskAnalysis {
+  symbol: string;
+  metrics: Record<string, unknown>;
+  markdown: string;
+  structured: RiskStructured | null;
+  model: string;
+  disclaimer: string;
+  cached?: boolean;
+  source?: "cache" | "live" | null;
+  updated_at?: string | null;
+}
+export interface RiskCacheLookup {
+  cached: boolean;
+  symbol: string;
+  source?: "cache" | "live" | null;
+  metrics?: Record<string, unknown>;
+  markdown?: string;
+  structured?: RiskStructured | null;
+  model?: string;
+  disclaimer?: string;
+  updated_at?: string | null;
+}
+export interface GrowthStructured {
+  outlook_band: "low" | "moderate" | "high";
+  confidence: "low" | "medium" | "high";
+  primary_driver: string | null;
+  five_year_summary: string | null;
+  ten_year_summary: string | null;
+}
+export interface GrowthAnalysis {
+  symbol: string;
+  metrics: Record<string, unknown>;
+  markdown: string;
+  structured: GrowthStructured | null;
+  model: string;
+  disclaimer: string;
+  cached?: boolean;
+  source?: "cache" | "live" | null;
+  updated_at?: string | null;
+}
+export interface GrowthCacheLookup {
+  cached: boolean;
+  symbol: string;
+  source?: "cache" | "live" | null;
+  metrics?: Record<string, unknown>;
+  markdown?: string;
+  structured?: GrowthStructured | null;
+  model?: string;
+  disclaimer?: string;
+  updated_at?: string | null;
+}
+export interface InstitutionalStructured {
+  stance: "attractive" | "mixed" | "unattractive";
+  confidence: "low" | "medium" | "high";
+  buy_reasons: string[];
+  avoid_reasons: string[];
+  catalysts: string[];
+  thesis_one_liner: string | null;
+}
+export interface InstitutionalAnalysis {
+  symbol: string;
+  metrics: Record<string, unknown>;
+  markdown: string;
+  structured: InstitutionalStructured | null;
+  model: string;
+  disclaimer: string;
+  cached?: boolean;
+  source?: "cache" | "live" | null;
+  updated_at?: string | null;
+}
+export interface InstitutionalCacheLookup {
+  cached: boolean;
+  symbol: string;
+  source?: "cache" | "live" | null;
+  metrics?: Record<string, unknown>;
+  markdown?: string;
+  structured?: InstitutionalStructured | null;
+  model?: string;
+  disclaimer?: string;
+  updated_at?: string | null;
+}
+export interface DebateStructured {
+  bull_score: number;
+  bear_score: number;
+  winner: "bull" | "bear" | "draw";
+  confidence: "low" | "medium" | "high";
+  conclusion_one_liner: string | null;
+}
+export interface DebateAnalysis {
+  symbol: string;
+  metrics: Record<string, unknown>;
+  markdown: string;
+  structured: DebateStructured | null;
+  model: string;
+  disclaimer: string;
+  cached?: boolean;
+  source?: "cache" | "live" | null;
+  updated_at?: string | null;
+}
+export interface DebateCacheLookup {
+  cached: boolean;
+  symbol: string;
+  source?: "cache" | "live" | null;
+  metrics?: Record<string, unknown>;
+  markdown?: string;
+  structured?: DebateStructured | null;
+  model?: string;
+  disclaimer?: string;
+  updated_at?: string | null;
+}
+export interface EarningsStructured {
+  surprise: "beat" | "miss" | "inline" | "unknown";
+  confidence: "low" | "medium" | "high";
+  summary: string | null;
+}
+export interface EarningsAnalysis {
+  symbol: string;
+  metrics: Record<string, unknown>;
+  markdown: string;
+  structured: EarningsStructured | null;
+  model: string;
+  disclaimer: string;
+  cached?: boolean;
+  source?: "cache" | "live" | null;
+  updated_at?: string | null;
+}
+export interface EarningsCacheLookup {
+  cached: boolean;
+  symbol: string;
+  source?: "cache" | "live" | null;
+  metrics?: Record<string, unknown>;
+  markdown?: string;
+  structured?: EarningsStructured | null;
+  model?: string;
+  disclaimer?: string;
+  updated_at?: string | null;
+}
+export interface VerdictStructured {
+  verdict: "buy" | "hold" | "avoid";
+  confidence: "low" | "medium" | "high";
+  horizon_fit: "short" | "long" | "both" | "neither";
+  summary: string | null;
+}
+export interface VerdictAnalysis {
+  symbol: string;
+  metrics: Record<string, unknown>;
+  markdown: string;
+  structured: VerdictStructured | null;
+  model: string;
+  disclaimer: string;
+  cached?: boolean;
+  source?: "cache" | "live" | null;
+  updated_at?: string | null;
+}
+export interface VerdictCacheLookup {
+  cached: boolean;
+  symbol: string;
+  source?: "cache" | "live" | null;
+  metrics?: Record<string, unknown>;
+  markdown?: string;
+  structured?: VerdictStructured | null;
+  model?: string;
+  disclaimer?: string;
+  updated_at?: string | null;
+}
 export interface StockMetrics {
   current_price: number | null;
   daily_change_pct: number | null;
@@ -664,6 +842,48 @@ export const api = {
     }),
   aiValuationCache: (symbol: string) =>
     request<ValuationCacheLookup>(`/api/ai/valuation/${encodeURIComponent(symbol)}`),
+  aiRisk: (symbol: string, period = "1y", force = true) =>
+    request<RiskAnalysis>(`/api/ai/risk`, {
+      method: "POST",
+      body: JSON.stringify({ symbol, period, force }),
+    }),
+  aiRiskCache: (symbol: string) =>
+    request<RiskCacheLookup>(`/api/ai/risk/${encodeURIComponent(symbol)}`),
+  aiGrowth: (symbol: string, period = "1y", force = true) =>
+    request<GrowthAnalysis>(`/api/ai/growth`, {
+      method: "POST",
+      body: JSON.stringify({ symbol, period, force }),
+    }),
+  aiGrowthCache: (symbol: string) =>
+    request<GrowthCacheLookup>(`/api/ai/growth/${encodeURIComponent(symbol)}`),
+  aiInstitutional: (symbol: string, period = "1y", force = true) =>
+    request<InstitutionalAnalysis>(`/api/ai/institutional`, {
+      method: "POST",
+      body: JSON.stringify({ symbol, period, force }),
+    }),
+  aiInstitutionalCache: (symbol: string) =>
+    request<InstitutionalCacheLookup>(`/api/ai/institutional/${encodeURIComponent(symbol)}`),
+  aiDebate: (symbol: string, period = "1y", force = true) =>
+    request<DebateAnalysis>(`/api/ai/debate`, {
+      method: "POST",
+      body: JSON.stringify({ symbol, period, force }),
+    }),
+  aiDebateCache: (symbol: string) =>
+    request<DebateCacheLookup>(`/api/ai/debate/${encodeURIComponent(symbol)}`),
+  aiEarnings: (symbol: string, period = "1y", force = true) =>
+    request<EarningsAnalysis>(`/api/ai/earnings`, {
+      method: "POST",
+      body: JSON.stringify({ symbol, period, force }),
+    }),
+  aiEarningsCache: (symbol: string) =>
+    request<EarningsCacheLookup>(`/api/ai/earnings/${encodeURIComponent(symbol)}`),
+  aiVerdict: (symbol: string, period = "1y", force = true) =>
+    request<VerdictAnalysis>(`/api/ai/verdict`, {
+      method: "POST",
+      body: JSON.stringify({ symbol, period, force }),
+    }),
+  aiVerdictCache: (symbol: string) =>
+    request<VerdictCacheLookup>(`/api/ai/verdict/${encodeURIComponent(symbol)}`),
   adminIndustries: () =>
     request<{
       industries: Record<string, { symbol: string; company_name: string | null }[]>;

@@ -264,3 +264,20 @@ def compute_trend_context(hist: pd.DataFrame) -> dict | None:
         "bad_entry_zone": f"{bad_entry_low:.2f} - {bad_entry_high:.2f}",
         "bad_entry_label": bad_entry_label,
     }
+
+
+def get_earnings_dates(symbol: str, limit: int = 8):
+    """Best-effort earnings calendar rows from yfinance (may be empty)."""
+    ticker = get_ticker(symbol)
+
+    def _load():
+        try:
+            df = ticker.get_earnings_dates(limit=limit)
+        except Exception:
+            try:
+                df = ticker.earnings_dates
+            except Exception:
+                return None
+        return df
+
+    return with_retry(_load)

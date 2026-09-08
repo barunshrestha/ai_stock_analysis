@@ -207,4 +207,101 @@ def build_research_metrics(symbol: str, period: str = "1y") -> dict:
         "peer_note": None
         if peers
         else "Peer list not available from Yahoo for this symbol — do not invent competitor valuations.",
+        "ownership": {
+            "held_percent_institutions": _clean(
+                info.get("heldPercentInstitutions") * 100
+                if info.get("heldPercentInstitutions") is not None
+                else None
+            ),
+            "held_percent_insiders": _clean(
+                info.get("heldPercentInsiders") * 100
+                if info.get("heldPercentInsiders") is not None
+                else None
+            ),
+        },
+    }
+
+
+def build_earnings_context(symbol: str) -> dict:
+    """Compact earnings surprise / reaction pack for Issue #14 (best-effort; never invent)."""
+    sym = symbol.strip().upper()
+    info = stock_service.get_info(sym) or {}
+    hist = stock_service.get_history(sym, "6mo")
+
+    eps_actual = _clean(info.get("epsTrailingTwelveMonths") or info.get("trailingEps"))
+    eps_estimate = _clean(info.get("epsForward") or info.get("forwardEps"))
+    surprise_pct = None
+    if isinstance(eps_actual, (int, float)) and isinstance(eps_estimate, (int, float)) and eps_estimate:
+        surprise_pct = round((float(eps_actual) - float(eps_estimate)) / abs(float(eps_estimate)) * 100, 2)
+
+    last_report_date = None
+    next_earnings_date = None
+    dates_df = stock_service.get_earnings_dates(sym)
+    if dates_df is not None and not getattr(dates_df, "empty", True):
+        try:
+            idx = list(dates_df.index)
+            # typically newest first; pick reported vs upcoming by comparing to today
+            import datetime as _dt
+            now = _dt.datetime.now(_dt.timezone.utc)
+            past = []
+            future = []
+            for ts in idx:
+                ts_aware = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
+                if getattr(ts_aware, "tzinfo", None) is None:
+                    ts_aware = ts_aware.replace(tzinfo=_dt.timezone.utc)
+                if ts_aware <= now:
+                    past.append(ts)
+                else:
+                    future.append(ts)
+            if past:
+                last_report_date = str(past[0])[:10]
+            if future:
+                next_earnings_date = str(sorted(future)[0])[:10]
+            # prefer EPS columns when present on last row
+            if past:
+                row = dates_df.loc[past[0]]
+                for col, key in (
+                    ("Reported EPS", "eps_actual"),
+                    ("EPS Estimate", "eps_estimate"),
+                    ("Surprise(%)", "surprise_pct"),
+                ):
+                    if col in dates_df.columns:
+                        val = _clean(row.get(col) if hasattr(row, "get") else row[col])
+                        if key == "eps_actual" and val is not None:
+                            eps_actual = val
+                        elif key == "eps_estimate" and val is not None:
+                            eps_estimate = val
+                        elif key == "surprise_pct" and val is not None:
+                            surprise_pct = val
+        except Exception:
+            pass
+
+    price_reaction_pct = None
+    if last_report_date and hist is not None and not hist.empty and "Close" in hist.columns:
+        try:
+            import pandas as pd
+            day = pd.Timestamp(last_report_date)
+            closes = hist["Close"]
+            # find nearest session on/after report date
+            after = closes[closes.index.normalize() >= day.normalize()]
+            before = closes[closes.index.normalize() < day.normalize()]
+            if len(after) and len(before):
+                pre = float(before.iloc[-1])
+                post = float(after.iloc[min(1, len(after) - 1)])
+                if pre:
+                    price_reaction_pct = round((post - pre) / pre * 100, 2)
+        except Exception:
+            price_reaction_pct = None
+
+    return {
+        "symbol": sym,
+        "last_report_date": last_report_date,
+        "next_earnings_date": next_earnings_date,
+        "eps_actual": eps_actual,
+        "eps_estimate": eps_estimate,
+        "surprise_pct": surprise_pct,
+        "earnings_growth": _clean(info.get("earningsGrowth")),
+        "revenue_growth": _clean(info.get("revenueGrowth")),
+        "price_reaction_pct": price_reaction_pct,
+        "note": "Fields may be null when Yahoo does not provide estimates or dates — do not invent beats/misses.",
     }
