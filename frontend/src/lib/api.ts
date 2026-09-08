@@ -101,6 +101,53 @@ export interface MoatCacheLookup {
   updated_at?: string | null;
 }
 
+export type RiskLevel = "low" | "medium" | "high";
+export type RiskCategory =
+  | "economic"
+  | "disruption"
+  | "competition"
+  | "regulatory"
+  | "financial"
+  | "other";
+
+export interface RankedRisk {
+  rank: number;
+  category: RiskCategory;
+  title: string;
+  severity: RiskLevel;
+}
+
+export interface RiskStructured {
+  overall_risk: RiskLevel;
+  confidence: RiskLevel;
+  ranked_risks: RankedRisk[];
+  summary: string | null;
+}
+
+export interface RiskAnalysis {
+  symbol: string;
+  metrics: Record<string, unknown>;
+  markdown: string;
+  structured: RiskStructured | null;
+  model: string;
+  disclaimer: string;
+  cached?: boolean;
+  source?: "cache" | "live" | null;
+  updated_at?: string | null;
+}
+
+export interface RiskCacheLookup {
+  cached: boolean;
+  symbol: string;
+  source?: "cache" | "live" | null;
+  metrics?: Record<string, unknown>;
+  markdown?: string;
+  structured?: RiskStructured | null;
+  model?: string;
+  disclaimer?: string;
+  updated_at?: string | null;
+}
+
 export interface StockMetrics {
   current_price: number | null;
   daily_change_pct: number | null;
@@ -626,6 +673,13 @@ export const api = {
     }),
   aiMoatCache: (symbol: string) =>
     request<MoatCacheLookup>(`/api/ai/moat/${encodeURIComponent(symbol)}`),
+  aiRisk: (symbol: string, period = "1y", force = true) =>
+    request<RiskAnalysis>(`/api/ai/risk`, {
+      method: "POST",
+      body: JSON.stringify({ symbol, period, force }),
+    }),
+  aiRiskCache: (symbol: string) =>
+    request<RiskCacheLookup>(`/api/ai/risk/${encodeURIComponent(symbol)}`),
   adminIndustries: () =>
     request<{
       industries: Record<string, { symbol: string; company_name: string | null }[]>;
