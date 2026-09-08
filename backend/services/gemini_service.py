@@ -232,3 +232,99 @@ def generate_moat_memo(metrics: dict) -> tuple[str | None, dict | None, str | No
     if not markdown:
         return None, None, "Gemini returned no usable moat memo."
     return markdown, structured, None
+
+
+SYSTEM_PROMPT_VERDICT = """You are an equity research educator helping retail investors practice analysis.
+Write a clear "Should I buy this stock?" memo in simple language with professional insights.
+
+Hard rules:
+- Use ONLY the metrics and facts provided in the user message.
+- Never invent catalysts, risks, price targets, or peer facts not supported by the context.
+- If a field is null/missing, say the data is not available — do not guess.
+- Do NOT call or assume other analysis memos (moat, valuation, Wall Street, etc.); reason only from this context.
+- This is educational / journaling content, NOT personalized investment advice and NOT a recommendation to buy, hold, or sell any security.
+- Emphasize uncertainty: markets are unpredictable; past metrics do not guarantee future results.
+- Final verdict labels are educational frameworks only (Buy / Hold / Avoid) — never "Sell". If you would say sell, use Avoid.
+
+Cover these sections in order, using markdown headings:
+1. Short-term outlook (1 year)
+2. Long-term outlook (5+ years)
+3. Key catalysts
+4. Major risks
+5. Final verdict (Buy, Hold, or Avoid) with a brief rationale
+
+After the markdown memo, end with a single fenced JSON block (and nothing after it) in this exact shape:
+```json
+{
+  "verdict": "buy" | "hold" | "avoid",
+  "confidence": "low" | "medium" | "high",
+  "horizon_fit": "short" | "long" | "both" | "neither",
+  "summary": "one short sentence"
+}
+```
+"""
+
+_VERDICT_VALUES = frozenset({"buy", "hold", "avoid"})
+_HORIZON_FIT_VALUES = frozenset({"short", "long", "both", "neither"})
+
+
+def parse_verdict_response(raw: str) -> tuple[str, dict | None]:
+    """Split verdict markdown from trailing JSON; map sell→avoid."""
+    if not raw or not raw.strip():
+        return "", None
+
+    matches = list(_JSON_FENCE_RE.finditer(raw))
+    structured: dict | None = None
+    markdown = raw.strip()
+
+    if matches:
+        last = matches[-1]
+        try:
+            parsed = json.loads(last.group(1))
+            if isinstance(parsed, dict):
+                structured = _normalize_verdict_structured(parsed)
+        except json.JSONDecodeError:
+            structured = None
+        markdown = (raw[: last.start()] + raw[last.end() :]).strip()
+
+    return markdown, structured
+
+
+def _normalize_verdict_structured(data: dict[str, Any]) -> dict:
+    confidence = str(data.get("confidence") or "medium").lower()
+    if confidence not in ("low", "medium", "high"):
+        confidence = "medium"
+    horizon = str(data.get("horizon_fit") or "neither").lower().strip()
+    if horizon not in _HORIZON_FIT_VALUES:
+        horizon = "neither"
+    verdict = str(data.get("verdict") or "hold").lower().strip()
+    # Model sometimes slips and returns sell — treat as avoid.
+    if verdict == "sell":
+        verdict = "avoid"
+    if verdict not in _VERDICT_VALUES:
+        verdict = "hold"
+    return {
+        "verdict": verdict,
+        "confidence": confidence,
+        "horizon_fit": horizon,
+        "summary": str(data.get("summary") or "").strip() or None,
+    }
+
+
+def generate_verdict_memo(metrics: dict) -> tuple[str | None, dict | None, str | None]:
+    """Ground Gemini on metrics for Issue #15 buy verdict. Returns (markdown, structured, error)."""
+    symbol = (metrics.get("identity") or {}).get("symbol") or "UNKNOWN"
+    user_prompt = (
+        f"Evaluate whether {symbol} is a good investment today using ONLY this structured "
+        f"context JSON. Do not rely on any other cached analyses.\n\n"
+        f"```json\n{json.dumps(metrics, default=str, indent=2)}\n```\n\n"
+        "Produce the buy-verdict memo and trailing JSON as instructed. "
+        "Remember: educational only — not investment advice."
+    )
+    content, error = call_gemini(SYSTEM_PROMPT_VERDICT, user_prompt)
+    if error:
+        return None, None, error
+    markdown, structured = parse_verdict_response(content or "")
+    if not markdown:
+        return None, None, "Gemini returned no usable verdict memo."
+    return markdown, structured, None

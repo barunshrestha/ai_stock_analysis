@@ -13,6 +13,7 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 WALL_STREET_ANALYSIS_TYPE = "wall_street"
 MOAT_ANALYSIS_TYPE = "moat"
+VERDICT_ANALYSIS_TYPE = "verdict"
 
 
 class SummaryRequest(BaseModel):
@@ -33,6 +34,12 @@ class WallStreetRequest(BaseModel):
 
 
 class MoatRequest(BaseModel):
+    symbol: str = Field(..., min_length=1, max_length=12)
+    period: str = "1y"
+    force: bool = True
+
+
+class VerdictRequest(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=12)
     period: str = "1y"
     force: bool = True
@@ -222,6 +229,66 @@ def moat_analysis(req: MoatRequest, db=Depends(get_db)):
     saved = db.upsert_ai_analysis_cache(
         ticker=symbol,
         analysis_type=MOAT_ANALYSIS_TYPE,
+        markdown=markdown or "",
+        model=GEMINI_MODEL,
+        structured=structured,
+        metrics=metrics,
+    )
+    updated_at = saved.get("updated_at") if saved else None
+
+    return _ai_memo_payload(
+        symbol=symbol,
+        markdown=markdown or "",
+        structured=structured,
+        metrics=metrics,
+        model=GEMINI_MODEL,
+        source="live",
+        updated_at=updated_at,
+        cached=False,
+    )
+
+
+@router.get("/verdict/{ticker}")
+def get_verdict_cache(ticker: str, db=Depends(get_db)):
+    """Return cached buy-verdict memo if present (200 + cached:false when missing)."""
+    symbol = ticker.strip().upper()
+    if not symbol:
+        raise HTTPException(status_code=422, detail="Ticker is required.")
+    row = db.get_ai_analysis_cache(symbol, VERDICT_ANALYSIS_TYPE)
+    if not row:
+        return {"cached": False, "symbol": symbol, "source": None}
+    return _ai_memo_payload(
+        symbol=symbol,
+        markdown=row.get("markdown") or "",
+        structured=row.get("structured"),
+        metrics=row.get("metrics"),
+        model=row.get("model"),
+        source="cache",
+        updated_at=row.get("updated_at"),
+        cached=True,
+    )
+
+
+@router.post("/verdict")
+def verdict_analysis(req: VerdictRequest, db=Depends(get_db)):
+    """Issue #15: Should I buy? memo via Gemini (self-contained; upserts cache)."""
+    symbol = req.symbol.strip().upper()
+    try:
+        metrics = research_metrics_service.build_research_metrics(symbol, req.period)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch data for {symbol}: {exc}")
+
+    markdown, structured, error = gemini_service.generate_verdict_memo(metrics)
+    if error:
+        raise HTTPException(status_code=503, detail=error)
+
+    saved = db.upsert_ai_analysis_cache(
+        ticker=symbol,
+        analysis_type=VERDICT_ANALYSIS_TYPE,
         markdown=markdown or "",
         model=GEMINI_MODEL,
         structured=structured,

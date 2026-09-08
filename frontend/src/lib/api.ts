@@ -101,6 +101,37 @@ export interface MoatCacheLookup {
   updated_at?: string | null;
 }
 
+export interface VerdictStructured {
+  verdict: "buy" | "hold" | "avoid";
+  confidence: "low" | "medium" | "high";
+  horizon_fit: "short" | "long" | "both" | "neither";
+  summary: string | null;
+}
+
+export interface VerdictAnalysis {
+  symbol: string;
+  metrics: Record<string, unknown>;
+  markdown: string;
+  structured: VerdictStructured | null;
+  model: string;
+  disclaimer: string;
+  cached?: boolean;
+  source?: "cache" | "live" | null;
+  updated_at?: string | null;
+}
+
+export interface VerdictCacheLookup {
+  cached: boolean;
+  symbol: string;
+  source?: "cache" | "live" | null;
+  metrics?: Record<string, unknown>;
+  markdown?: string;
+  structured?: VerdictStructured | null;
+  model?: string;
+  disclaimer?: string;
+  updated_at?: string | null;
+}
+
 export interface StockMetrics {
   current_price: number | null;
   daily_change_pct: number | null;
@@ -626,6 +657,13 @@ export const api = {
     }),
   aiMoatCache: (symbol: string) =>
     request<MoatCacheLookup>(`/api/ai/moat/${encodeURIComponent(symbol)}`),
+  aiVerdict: (symbol: string, period = "1y", force = true) =>
+    request<VerdictAnalysis>(`/api/ai/verdict`, {
+      method: "POST",
+      body: JSON.stringify({ symbol, period, force }),
+    }),
+  aiVerdictCache: (symbol: string) =>
+    request<VerdictCacheLookup>(`/api/ai/verdict/${encodeURIComponent(symbol)}`),
   adminIndustries: () =>
     request<{
       industries: Record<string, { symbol: string; company_name: string | null }[]>;
