@@ -101,6 +101,37 @@ export interface MoatCacheLookup {
   updated_at?: string | null;
 }
 
+export interface ValuationStructured {
+  verdict: "undervalued" | "fair" | "overvalued";
+  confidence: "low" | "medium" | "high";
+  pe_vs_peers: "cheap" | "inline" | "expensive" | "unknown";
+  summary: string | null;
+}
+
+export interface ValuationAnalysis {
+  symbol: string;
+  metrics: Record<string, unknown>;
+  markdown: string;
+  structured: ValuationStructured | null;
+  model: string;
+  disclaimer: string;
+  cached?: boolean;
+  source?: "cache" | "live" | null;
+  updated_at?: string | null;
+}
+
+export interface ValuationCacheLookup {
+  cached: boolean;
+  symbol: string;
+  source?: "cache" | "live" | null;
+  metrics?: Record<string, unknown>;
+  markdown?: string;
+  structured?: ValuationStructured | null;
+  model?: string;
+  disclaimer?: string;
+  updated_at?: string | null;
+}
+
 export interface StockMetrics {
   current_price: number | null;
   daily_change_pct: number | null;
@@ -626,6 +657,13 @@ export const api = {
     }),
   aiMoatCache: (symbol: string) =>
     request<MoatCacheLookup>(`/api/ai/moat/${encodeURIComponent(symbol)}`),
+  aiValuation: (symbol: string, period = "1y", force = true) =>
+    request<ValuationAnalysis>(`/api/ai/valuation`, {
+      method: "POST",
+      body: JSON.stringify({ symbol, period, force }),
+    }),
+  aiValuationCache: (symbol: string) =>
+    request<ValuationCacheLookup>(`/api/ai/valuation/${encodeURIComponent(symbol)}`),
   adminIndustries: () =>
     request<{
       industries: Record<string, { symbol: string; company_name: string | null }[]>;

@@ -232,3 +232,90 @@ def generate_moat_memo(metrics: dict) -> tuple[str | None, dict | None, str | No
     if not markdown:
         return None, None, "Gemini returned no usable moat memo."
     return markdown, structured, None
+
+
+SYSTEM_PROMPT_VALUATION = """You are an investment-bank-style equity valuation analyst.
+Write a clear valuation memo in simple language.
+
+Hard rules:
+- Use ONLY the metrics and facts provided in the user message (including any `dcf` block).
+- Never invent DCF inputs, peer multiples, or industry averages not in the context.
+- If `dcf` is null/missing, say a DCF estimate is unavailable and rely on multiples only.
+- This is educational / journaling content, not personalized investment advice.
+
+Cover these sections in order, using markdown headings:
+1. P/E and multiples vs peers
+2. Discounted cash flow (DCF) estimate
+3. Industry / peer average valuation context
+4. Undervalued, fair, or overvalued conclusion
+
+After the markdown memo, end with a single fenced JSON block (and nothing after it) in this exact shape:
+```json
+{
+  "verdict": "undervalued" | "fair" | "overvalued",
+  "confidence": "low" | "medium" | "high",
+  "pe_vs_peers": "cheap" | "inline" | "expensive" | "unknown",
+  "summary": "one short sentence"
+}
+```
+"""
+
+_VALUATION_VERDICTS = frozenset({"undervalued", "fair", "overvalued"})
+_PE_VS_PEERS = frozenset({"cheap", "inline", "expensive", "unknown"})
+
+
+def parse_valuation_response(raw: str) -> tuple[str, dict | None]:
+    """Split valuation markdown from trailing JSON; normalize verdict enums."""
+    if not raw or not raw.strip():
+        return "", None
+
+    matches = list(_JSON_FENCE_RE.finditer(raw))
+    structured: dict | None = None
+    markdown = raw.strip()
+
+    if matches:
+        last = matches[-1]
+        try:
+            parsed = json.loads(last.group(1))
+            if isinstance(parsed, dict):
+                structured = _normalize_valuation_structured(parsed)
+        except json.JSONDecodeError:
+            structured = None
+        markdown = (raw[: last.start()] + raw[last.end() :]).strip()
+
+    return markdown, structured
+
+
+def _normalize_valuation_structured(data: dict[str, Any]) -> dict:
+    confidence = str(data.get("confidence") or "medium").lower()
+    if confidence not in ("low", "medium", "high"):
+        confidence = "medium"
+    verdict = str(data.get("verdict") or "fair").lower().strip()
+    if verdict not in _VALUATION_VERDICTS:
+        verdict = "fair"
+    pe_vs = str(data.get("pe_vs_peers") or "unknown").lower().strip()
+    if pe_vs not in _PE_VS_PEERS:
+        pe_vs = "unknown"
+    return {
+        "verdict": verdict,
+        "confidence": confidence,
+        "pe_vs_peers": pe_vs,
+        "summary": str(data.get("summary") or "").strip() or None,
+    }
+
+
+def generate_valuation_memo(metrics: dict) -> tuple[str | None, dict | None, str | None]:
+    """Ground Gemini on metrics (+ optional dcf) for Issue #9. Returns (markdown, structured, error)."""
+    symbol = (metrics.get("identity") or {}).get("symbol") or "UNKNOWN"
+    user_prompt = (
+        f"Perform a valuation analysis of {symbol} using ONLY this structured context JSON.\n\n"
+        f"```json\n{json.dumps(metrics, default=str, indent=2)}\n```\n\n"
+        "Produce the valuation memo and trailing JSON verdict as instructed."
+    )
+    content, error = call_gemini(SYSTEM_PROMPT_VALUATION, user_prompt)
+    if error:
+        return None, None, error
+    markdown, structured = parse_valuation_response(content or "")
+    if not markdown:
+        return None, None, "Gemini returned no usable valuation memo."
+    return markdown, structured, None
