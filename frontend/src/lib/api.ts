@@ -101,6 +101,38 @@ export interface MoatCacheLookup {
   updated_at?: string | null;
 }
 
+export interface DebateStructured {
+  bull_score: number;
+  bear_score: number;
+  winner: "bull" | "bear" | "draw";
+  confidence: "low" | "medium" | "high";
+  conclusion_one_liner: string | null;
+}
+
+export interface DebateAnalysis {
+  symbol: string;
+  metrics: Record<string, unknown>;
+  markdown: string;
+  structured: DebateStructured | null;
+  model: string;
+  disclaimer: string;
+  cached?: boolean;
+  source?: "cache" | "live" | null;
+  updated_at?: string | null;
+}
+
+export interface DebateCacheLookup {
+  cached: boolean;
+  symbol: string;
+  source?: "cache" | "live" | null;
+  metrics?: Record<string, unknown>;
+  markdown?: string;
+  structured?: DebateStructured | null;
+  model?: string;
+  disclaimer?: string;
+  updated_at?: string | null;
+}
+
 export interface StockMetrics {
   current_price: number | null;
   daily_change_pct: number | null;
@@ -626,6 +658,13 @@ export const api = {
     }),
   aiMoatCache: (symbol: string) =>
     request<MoatCacheLookup>(`/api/ai/moat/${encodeURIComponent(symbol)}`),
+  aiDebate: (symbol: string, period = "1y", force = true) =>
+    request<DebateAnalysis>(`/api/ai/debate`, {
+      method: "POST",
+      body: JSON.stringify({ symbol, period, force }),
+    }),
+  aiDebateCache: (symbol: string) =>
+    request<DebateCacheLookup>(`/api/ai/debate/${encodeURIComponent(symbol)}`),
   adminIndustries: () =>
     request<{
       industries: Record<string, { symbol: string; company_name: string | null }[]>;

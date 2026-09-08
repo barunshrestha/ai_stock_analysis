@@ -232,3 +232,107 @@ def generate_moat_memo(metrics: dict) -> tuple[str | None, dict | None, str | No
     if not markdown:
         return None, None, "Gemini returned no usable moat memo."
     return markdown, structured, None
+
+
+SYSTEM_PROMPT_DEBATE = """You are moderating a structured equity debate between two analysts.
+Write in clear language. One analyst is bullish; one is bearish. Both must use data-backed arguments.
+
+Hard rules:
+- Use ONLY the metrics and facts provided in the user message.
+- Never invent numbers, catalysts, or peer facts not supported by the context.
+- If a field is null/missing, say the data is not available — do not guess.
+- Both sides must cite the provided metrics (growth, margins, valuation, risks, peers when present).
+- This is educational / journaling content, not personalized investment advice.
+
+Cover these sections in order, using markdown headings:
+1. Bull case
+2. Bear case
+3. Balanced conclusion
+
+After the markdown memo, end with a single fenced JSON block (and nothing after it) in this exact shape:
+```json
+{
+  "bull_score": 1-10,
+  "bear_score": 1-10,
+  "winner": "bull" | "bear" | "draw",
+  "confidence": "low" | "medium" | "high",
+  "conclusion_one_liner": "one short sentence"
+}
+```
+Scores reflect how strong each side's argument is given the data (not a price target).
+"""
+
+_DEBATE_WINNERS = frozenset({"bull", "bear", "draw"})
+
+
+def parse_debate_response(raw: str) -> tuple[str, dict | None]:
+    """Split debate markdown from trailing JSON; clamp scores to 1–10."""
+    if not raw or not raw.strip():
+        return "", None
+
+    matches = list(_JSON_FENCE_RE.finditer(raw))
+    structured: dict | None = None
+    markdown = raw.strip()
+
+    if matches:
+        last = matches[-1]
+        try:
+            parsed = json.loads(last.group(1))
+            if isinstance(parsed, dict):
+                structured = _normalize_debate_structured(parsed)
+        except json.JSONDecodeError:
+            structured = None
+        markdown = (raw[: last.start()] + raw[last.end() :]).strip()
+
+    return markdown, structured
+
+
+def _clamp_score(value: Any, default: int = 5) -> int:
+    try:
+        score = int(round(float(value)))
+    except (TypeError, ValueError):
+        score = default
+    return max(1, min(10, score))
+
+
+def _normalize_debate_structured(data: dict[str, Any]) -> dict:
+    confidence = str(data.get("confidence") or "medium").lower()
+    if confidence not in ("low", "medium", "high"):
+        confidence = "medium"
+
+    bull_score = _clamp_score(data.get("bull_score"))
+    bear_score = _clamp_score(data.get("bear_score"))
+
+    winner = str(data.get("winner") or "").lower().strip()
+    if winner not in _DEBATE_WINNERS:
+        if bull_score > bear_score:
+            winner = "bull"
+        elif bear_score > bull_score:
+            winner = "bear"
+        else:
+            winner = "draw"
+
+    return {
+        "bull_score": bull_score,
+        "bear_score": bear_score,
+        "winner": winner,
+        "confidence": confidence,
+        "conclusion_one_liner": str(data.get("conclusion_one_liner") or "").strip() or None,
+    }
+
+
+def generate_debate_memo(metrics: dict) -> tuple[str | None, dict | None, str | None]:
+    """Ground Gemini on metrics for Issue #13 bull vs bear debate. Returns (markdown, structured, error)."""
+    symbol = (metrics.get("identity") or {}).get("symbol") or "UNKNOWN"
+    user_prompt = (
+        f"Create a bull vs bear debate about {symbol} using ONLY this structured context JSON.\n\n"
+        f"```json\n{json.dumps(metrics, default=str, indent=2)}\n```\n\n"
+        "Produce the debate memo and trailing JSON scores as instructed."
+    )
+    content, error = call_gemini(SYSTEM_PROMPT_DEBATE, user_prompt)
+    if error:
+        return None, None, error
+    markdown, structured = parse_debate_response(content or "")
+    if not markdown:
+        return None, None, "Gemini returned no usable debate memo."
+    return markdown, structured, None
