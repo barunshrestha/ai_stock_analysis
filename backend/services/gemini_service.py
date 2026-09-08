@@ -232,3 +232,90 @@ def generate_moat_memo(metrics: dict) -> tuple[str | None, dict | None, str | No
     if not markdown:
         return None, None, "Gemini returned no usable moat memo."
     return markdown, structured, None
+
+
+SYSTEM_PROMPT_GROWTH = """You are a senior equity strategist specializing in long-term growth potential.
+Write a clear growth assessment in simple language with professional insights.
+
+Hard rules:
+- Use ONLY the metrics and facts provided in the user message.
+- Never invent TAM, market size dollars, industry growth rates, product roadmaps, or AI capabilities not supported by the context.
+- If market size or industry growth figures are missing, discuss qualitatively using sector/industry labels and state that quantitative TAM data is unavailable.
+- This is educational / journaling content, not personalized investment advice.
+
+Cover these sections in order, using markdown headings:
+1. Market size
+2. Industry growth rate
+3. Expansion opportunities
+4. New products
+5. AI or technology advantages
+6. 5–10 year growth outlook
+
+After the markdown memo, end with a single fenced JSON block (and nothing after it) in this exact shape:
+```json
+{
+  "outlook_band": "low" | "moderate" | "high",
+  "confidence": "low" | "medium" | "high",
+  "primary_driver": "short phrase",
+  "five_year_summary": "one short sentence",
+  "ten_year_summary": "one short sentence"
+}
+```
+"""
+
+_GROWTH_OUTLOOK_BANDS = frozenset({"low", "moderate", "high"})
+
+
+def parse_growth_response(raw: str) -> tuple[str, dict | None]:
+    """Split growth markdown from trailing JSON; normalize outlook enums."""
+    if not raw or not raw.strip():
+        return "", None
+
+    matches = list(_JSON_FENCE_RE.finditer(raw))
+    structured: dict | None = None
+    markdown = raw.strip()
+
+    if matches:
+        last = matches[-1]
+        try:
+            parsed = json.loads(last.group(1))
+            if isinstance(parsed, dict):
+                structured = _normalize_growth_structured(parsed)
+        except json.JSONDecodeError:
+            structured = None
+        markdown = (raw[: last.start()] + raw[last.end() :]).strip()
+
+    return markdown, structured
+
+
+def _normalize_growth_structured(data: dict[str, Any]) -> dict:
+    confidence = str(data.get("confidence") or "medium").lower()
+    if confidence not in ("low", "medium", "high"):
+        confidence = "medium"
+    outlook = str(data.get("outlook_band") or "moderate").lower().strip()
+    if outlook not in _GROWTH_OUTLOOK_BANDS:
+        outlook = "moderate"
+    return {
+        "outlook_band": outlook,
+        "confidence": confidence,
+        "primary_driver": str(data.get("primary_driver") or "").strip() or None,
+        "five_year_summary": str(data.get("five_year_summary") or "").strip() or None,
+        "ten_year_summary": str(data.get("ten_year_summary") or "").strip() or None,
+    }
+
+
+def generate_growth_memo(metrics: dict) -> tuple[str | None, dict | None, str | None]:
+    """Ground Gemini on metrics for Issue #11 growth analysis. Returns (markdown, structured, error)."""
+    symbol = (metrics.get("identity") or {}).get("symbol") or "UNKNOWN"
+    user_prompt = (
+        f"Analyze the future growth potential of {symbol} using ONLY this structured context JSON.\n\n"
+        f"```json\n{json.dumps(metrics, default=str, indent=2)}\n```\n\n"
+        "Produce the growth memo and trailing JSON outlook as instructed."
+    )
+    content, error = call_gemini(SYSTEM_PROMPT_GROWTH, user_prompt)
+    if error:
+        return None, None, error
+    markdown, structured = parse_growth_response(content or "")
+    if not markdown:
+        return None, None, "Gemini returned no usable growth memo."
+    return markdown, structured, None

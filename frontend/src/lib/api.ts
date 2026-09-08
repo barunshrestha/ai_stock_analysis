@@ -101,6 +101,38 @@ export interface MoatCacheLookup {
   updated_at?: string | null;
 }
 
+export interface GrowthStructured {
+  outlook_band: "low" | "moderate" | "high";
+  confidence: "low" | "medium" | "high";
+  primary_driver: string | null;
+  five_year_summary: string | null;
+  ten_year_summary: string | null;
+}
+
+export interface GrowthAnalysis {
+  symbol: string;
+  metrics: Record<string, unknown>;
+  markdown: string;
+  structured: GrowthStructured | null;
+  model: string;
+  disclaimer: string;
+  cached?: boolean;
+  source?: "cache" | "live" | null;
+  updated_at?: string | null;
+}
+
+export interface GrowthCacheLookup {
+  cached: boolean;
+  symbol: string;
+  source?: "cache" | "live" | null;
+  metrics?: Record<string, unknown>;
+  markdown?: string;
+  structured?: GrowthStructured | null;
+  model?: string;
+  disclaimer?: string;
+  updated_at?: string | null;
+}
+
 export interface StockMetrics {
   current_price: number | null;
   daily_change_pct: number | null;
@@ -626,6 +658,13 @@ export const api = {
     }),
   aiMoatCache: (symbol: string) =>
     request<MoatCacheLookup>(`/api/ai/moat/${encodeURIComponent(symbol)}`),
+  aiGrowth: (symbol: string, period = "1y", force = true) =>
+    request<GrowthAnalysis>(`/api/ai/growth`, {
+      method: "POST",
+      body: JSON.stringify({ symbol, period, force }),
+    }),
+  aiGrowthCache: (symbol: string) =>
+    request<GrowthCacheLookup>(`/api/ai/growth/${encodeURIComponent(symbol)}`),
   adminIndustries: () =>
     request<{
       industries: Record<string, { symbol: string; company_name: string | null }[]>;

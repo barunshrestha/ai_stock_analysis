@@ -20,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { TrendChart } from "@/components/stocks/trend-chart";
 import { WallStreetAnalysisPanel } from "@/components/stocks/wall-street-analysis";
 import { MoatAnalysisPanel } from "@/components/stocks/moat-analysis";
+import { GrowthAnalysisPanel } from "@/components/stocks/growth-analysis";
 
 function ollamaErrorMessage(error: unknown): string {
   if (error instanceof ApiError && error.status === 503) {
@@ -182,6 +183,7 @@ export function AiAnalysis({ symbol }: { symbol: string }) {
 
       <WallStreetAnalysisPanel symbol={symbol} />
       <MoatAnalysisPanel symbol={symbol} />
+      <GrowthAnalysisPanel symbol={symbol} />
 
       <div>
         <h2 className="mb-1 text-lg font-semibold">15-Point Analysis</h2>
