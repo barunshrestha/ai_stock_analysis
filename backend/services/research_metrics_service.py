@@ -207,4 +207,8 @@ def build_research_metrics(symbol: str, period: str = "1y") -> dict:
         "peer_note": None
         if peers
         else "Peer list not available from Yahoo for this symbol — do not invent competitor valuations.",
+        "ownership": {
+            "held_percent_institutions": _clean(info.get("heldPercentInstitutions")),
+            "held_percent_insiders": _clean(info.get("heldPercentInsiders")),
+        },
     }

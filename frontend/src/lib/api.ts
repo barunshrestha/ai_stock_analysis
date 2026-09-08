@@ -101,6 +101,39 @@ export interface MoatCacheLookup {
   updated_at?: string | null;
 }
 
+export interface InstitutionalStructured {
+  stance: "attractive" | "mixed" | "unattractive";
+  confidence: "low" | "medium" | "high";
+  buy_reasons: string[];
+  avoid_reasons: string[];
+  catalysts: string[];
+  thesis_one_liner: string | null;
+}
+
+export interface InstitutionalAnalysis {
+  symbol: string;
+  metrics: Record<string, unknown>;
+  markdown: string;
+  structured: InstitutionalStructured | null;
+  model: string;
+  disclaimer: string;
+  cached?: boolean;
+  source?: "cache" | "live" | null;
+  updated_at?: string | null;
+}
+
+export interface InstitutionalCacheLookup {
+  cached: boolean;
+  symbol: string;
+  source?: "cache" | "live" | null;
+  metrics?: Record<string, unknown>;
+  markdown?: string;
+  structured?: InstitutionalStructured | null;
+  model?: string;
+  disclaimer?: string;
+  updated_at?: string | null;
+}
+
 export interface StockMetrics {
   current_price: number | null;
   daily_change_pct: number | null;
@@ -626,6 +659,15 @@ export const api = {
     }),
   aiMoatCache: (symbol: string) =>
     request<MoatCacheLookup>(`/api/ai/moat/${encodeURIComponent(symbol)}`),
+  aiInstitutional: (symbol: string, period = "1y", force = true) =>
+    request<InstitutionalAnalysis>(`/api/ai/institutional`, {
+      method: "POST",
+      body: JSON.stringify({ symbol, period, force }),
+    }),
+  aiInstitutionalCache: (symbol: string) =>
+    request<InstitutionalCacheLookup>(
+      `/api/ai/institutional/${encodeURIComponent(symbol)}`,
+    ),
   adminIndustries: () =>
     request<{
       industries: Record<string, { symbol: string; company_name: string | null }[]>;

@@ -232,3 +232,105 @@ def generate_moat_memo(metrics: dict) -> tuple[str | None, dict | None, str | No
     if not markdown:
         return None, None, "Gemini returned no usable moat memo."
     return markdown, structured, None
+
+
+SYSTEM_PROMPT_INSTITUTIONAL = """You are a hedge fund portfolio manager writing an institutional investor memo.
+Evaluate whether the stock is a good long-term investment from an institutional perspective.
+Write in simple language with professional insights.
+
+Hard rules:
+- Use ONLY the metrics and facts provided in the user message (including any ownership block).
+- Never invent holdings percentages, catalysts, or peer facts not supported by the context.
+- If ownership data is missing, say it is unavailable — do not guess.
+- This is educational / journaling content, not personalized investment advice.
+
+Cover these sections in order, using markdown headings:
+1. Why institutions might buy it
+2. Why they might avoid it
+3. Key catalysts
+4. Investment thesis
+
+After the markdown memo, end with a single fenced JSON block (and nothing after it) in this exact shape:
+```json
+{
+  "stance": "attractive" | "mixed" | "unattractive",
+  "confidence": "low" | "medium" | "high",
+  "buy_reasons": ["..."],
+  "avoid_reasons": ["..."],
+  "catalysts": ["..."],
+  "thesis_one_liner": "one short sentence"
+}
+```
+"""
+
+_INSTITUTIONAL_STANCES = frozenset({"attractive", "mixed", "unattractive"})
+_LIST_CAP = 5
+
+
+def _cap_str_list(value: Any, limit: int = _LIST_CAP) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = str(item).strip() if item is not None else ""
+        if text:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def parse_institutional_response(raw: str) -> tuple[str, dict | None]:
+    """Split institutional markdown from trailing JSON; cap list fields to 5."""
+    if not raw or not raw.strip():
+        return "", None
+
+    matches = list(_JSON_FENCE_RE.finditer(raw))
+    structured: dict | None = None
+    markdown = raw.strip()
+
+    if matches:
+        last = matches[-1]
+        try:
+            parsed = json.loads(last.group(1))
+            if isinstance(parsed, dict):
+                structured = _normalize_institutional_structured(parsed)
+        except json.JSONDecodeError:
+            structured = None
+        markdown = (raw[: last.start()] + raw[last.end() :]).strip()
+
+    return markdown, structured
+
+
+def _normalize_institutional_structured(data: dict[str, Any]) -> dict:
+    confidence = str(data.get("confidence") or "medium").lower()
+    if confidence not in ("low", "medium", "high"):
+        confidence = "medium"
+    stance = str(data.get("stance") or "mixed").lower().strip()
+    if stance not in _INSTITUTIONAL_STANCES:
+        stance = "mixed"
+    return {
+        "stance": stance,
+        "confidence": confidence,
+        "buy_reasons": _cap_str_list(data.get("buy_reasons")),
+        "avoid_reasons": _cap_str_list(data.get("avoid_reasons")),
+        "catalysts": _cap_str_list(data.get("catalysts")),
+        "thesis_one_liner": str(data.get("thesis_one_liner") or "").strip() or None,
+    }
+
+
+def generate_institutional_memo(metrics: dict) -> tuple[str | None, dict | None, str | None]:
+    """Ground Gemini on metrics for Issue #12 institutional perspective. Returns (markdown, structured, error)."""
+    symbol = (metrics.get("identity") or {}).get("symbol") or "UNKNOWN"
+    user_prompt = (
+        f"Evaluate {symbol} from an institutional investor perspective using ONLY this structured context JSON.\n\n"
+        f"```json\n{json.dumps(metrics, default=str, indent=2)}\n```\n\n"
+        "Produce the institutional memo and trailing JSON verdict as instructed."
+    )
+    content, error = call_gemini(SYSTEM_PROMPT_INSTITUTIONAL, user_prompt)
+    if error:
+        return None, None, error
+    markdown, structured = parse_institutional_response(content or "")
+    if not markdown:
+        return None, None, "Gemini returned no usable institutional memo."
+    return markdown, structured, None
