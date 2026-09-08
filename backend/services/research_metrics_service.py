@@ -76,6 +76,39 @@ def _peer_symbols(info: dict) -> list[str] | None:
     return None
 
 
+def _peer_snapshots(peer_symbols: list[str] | None, exclude: str, limit: int = 3) -> list[dict]:
+    """Fetch compact margin/valuation snapshots for a few peer tickers (best-effort)."""
+    if not peer_symbols:
+        return []
+    out: list[dict] = []
+    for sym in peer_symbols:
+        s = str(sym).upper().strip()
+        if not s or s == exclude or len(out) >= limit:
+            continue
+        try:
+            info = stock_service.get_info(s) or {}
+            out.append(
+                {
+                    "symbol": s,
+                    "name": info.get("longName") or info.get("shortName") or s,
+                    "market_cap": _clean(info.get("marketCap")),
+                    "gross_margin_pct": _clean(
+                        info.get("grossMargins") * 100 if info.get("grossMargins") is not None else None
+                    ),
+                    "operating_margin_pct": _clean(
+                        info.get("operatingMargins") * 100 if info.get("operatingMargins") is not None else None
+                    ),
+                    "profit_margin_pct": _clean(
+                        info.get("profitMargins") * 100 if info.get("profitMargins") is not None else None
+                    ),
+                    "pe_ratio": _clean(info.get("trailingPE")),
+                }
+            )
+        except Exception:
+            continue
+    return out
+
+
 def build_research_metrics(symbol: str, period: str = "1y") -> dict:
     """Fetch market data and return a stable metrics dict for Gemini grounding."""
     sym = symbol.strip().upper()
@@ -108,6 +141,7 @@ def build_research_metrics(symbol: str, period: str = "1y") -> dict:
             change_6m = round((float(close.iloc[-1]) - past) / past * 100, 2)
 
     peers = _peer_symbols(info)
+    peer_comps = _peer_snapshots(peers, exclude=sym, limit=3)
 
     return {
         "identity": {
@@ -169,6 +203,7 @@ def build_research_metrics(symbol: str, period: str = "1y") -> dict:
         },
         "trend": trend,
         "peers": peers,
+        "peer_comps": peer_comps,
         "peer_note": None
         if peers
         else "Peer list not available from Yahoo for this symbol — do not invent competitor valuations.",

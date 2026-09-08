@@ -12,6 +12,7 @@ from backend.services import gemini_service, ollama_service, research_metrics_se
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 WALL_STREET_ANALYSIS_TYPE = "wall_street"
+MOAT_ANALYSIS_TYPE = "moat"
 
 
 class SummaryRequest(BaseModel):
@@ -31,6 +32,12 @@ class WallStreetRequest(BaseModel):
     force: bool = True
 
 
+class MoatRequest(BaseModel):
+    symbol: str = Field(..., min_length=1, max_length=12)
+    period: str = "1y"
+    force: bool = True
+
+
 def _fetch_context(symbol: str, period: str):
     hist = stock_service.get_history(symbol, period)
     if hist is None or hist.empty:
@@ -40,7 +47,7 @@ def _fetch_context(symbol: str, period: str):
     return hist, info, earnings
 
 
-def _wall_street_payload(
+def _ai_memo_payload(
     *,
     symbol: str,
     markdown: str,
@@ -62,6 +69,10 @@ def _wall_street_payload(
         "updated_at": updated_at,
         "source": source,
     }
+
+
+def _wall_street_payload(**kwargs) -> dict:
+    return _ai_memo_payload(**kwargs)
 
 
 @router.get("/points")
@@ -159,6 +170,66 @@ def wall_street_analysis(req: WallStreetRequest, db=Depends(get_db)):
     updated_at = saved.get("updated_at") if saved else None
 
     return _wall_street_payload(
+        symbol=symbol,
+        markdown=markdown or "",
+        structured=structured,
+        metrics=metrics,
+        model=GEMINI_MODEL,
+        source="live",
+        updated_at=updated_at,
+        cached=False,
+    )
+
+
+@router.get("/moat/{ticker}")
+def get_moat_cache(ticker: str, db=Depends(get_db)):
+    """Return cached moat memo if present (200 + cached:false when missing)."""
+    symbol = ticker.strip().upper()
+    if not symbol:
+        raise HTTPException(status_code=422, detail="Ticker is required.")
+    row = db.get_ai_analysis_cache(symbol, MOAT_ANALYSIS_TYPE)
+    if not row:
+        return {"cached": False, "symbol": symbol, "source": None}
+    return _ai_memo_payload(
+        symbol=symbol,
+        markdown=row.get("markdown") or "",
+        structured=row.get("structured"),
+        metrics=row.get("metrics"),
+        model=row.get("model"),
+        source="cache",
+        updated_at=row.get("updated_at"),
+        cached=True,
+    )
+
+
+@router.post("/moat")
+def moat_analysis(req: MoatRequest, db=Depends(get_db)):
+    """Issue #8: competitive moat memo via Gemini (always live; upserts cache)."""
+    symbol = req.symbol.strip().upper()
+    try:
+        metrics = research_metrics_service.build_research_metrics(symbol, req.period)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch data for {symbol}: {exc}")
+
+    markdown, structured, error = gemini_service.generate_moat_memo(metrics)
+    if error:
+        raise HTTPException(status_code=503, detail=error)
+
+    saved = db.upsert_ai_analysis_cache(
+        ticker=symbol,
+        analysis_type=MOAT_ANALYSIS_TYPE,
+        markdown=markdown or "",
+        model=GEMINI_MODEL,
+        structured=structured,
+        metrics=metrics,
+    )
+    updated_at = saved.get("updated_at") if saved else None
+
+    return _ai_memo_payload(
         symbol=symbol,
         markdown=markdown or "",
         structured=structured,

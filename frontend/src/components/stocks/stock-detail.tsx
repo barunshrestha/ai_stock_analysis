@@ -15,6 +15,7 @@ import { TrendChart } from "@/components/stocks/trend-chart";
 import { EarningsChart } from "@/components/stocks/earnings-chart";
 import { AiSummary } from "@/components/stocks/ai-summary";
 import { WallStreetAnalysisPanel } from "@/components/stocks/wall-street-analysis";
+import { MoatAnalysisPanel } from "@/components/stocks/moat-analysis";
 
 function LoadingState() {
   return (
@@ -78,6 +79,7 @@ export function StockDetail({ symbol }: { symbol: string }) {
           <PriceChart symbol={symbol} />
           <AiSummary symbol={symbol} />
           <WallStreetAnalysisPanel symbol={symbol} />
+          <MoatAnalysisPanel symbol={symbol} />
           {data.business_summary && (
             <Card>
               <CardHeader>
