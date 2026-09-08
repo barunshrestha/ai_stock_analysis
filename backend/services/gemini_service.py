@@ -232,3 +232,86 @@ def generate_moat_memo(metrics: dict) -> tuple[str | None, dict | None, str | No
     if not markdown:
         return None, None, "Gemini returned no usable moat memo."
     return markdown, structured, None
+
+
+SYSTEM_PROMPT_EARNINGS = """You are a senior equity research analyst specializing in earnings breakdowns.
+Write a clear earnings report memo in simple language with professional insights.
+
+Hard rules:
+- Use ONLY the metrics and facts provided in the user message (including any `earnings_context` block).
+- Never invent beats, misses, guidance figures, or market reactions that are not supported by the context.
+- If EPS actual/estimate/surprise or price reaction is null/missing, say the data is not available — do not guess.
+- Label surprise only when numbers support it; otherwise use "unknown".
+- This is educational / journaling content, not personalized investment advice.
+
+Cover these sections in order, using markdown headings:
+1. Revenue vs expectations
+2. Profit vs expectations
+3. Key metrics
+4. Management guidance
+5. Market reaction
+
+After the markdown memo, end with a single fenced JSON block (and nothing after it) in this exact shape:
+```json
+{
+  "surprise": "beat" | "miss" | "inline" | "unknown",
+  "confidence": "low" | "medium" | "high",
+  "summary": "one short sentence"
+}
+```
+"""
+
+_EARNINGS_SURPRISES = frozenset({"beat", "miss", "inline", "unknown"})
+
+
+def parse_earnings_response(raw: str) -> tuple[str, dict | None]:
+    """Split earnings markdown from trailing JSON; normalize surprise enums."""
+    if not raw or not raw.strip():
+        return "", None
+
+    matches = list(_JSON_FENCE_RE.finditer(raw))
+    structured: dict | None = None
+    markdown = raw.strip()
+
+    if matches:
+        last = matches[-1]
+        try:
+            parsed = json.loads(last.group(1))
+            if isinstance(parsed, dict):
+                structured = _normalize_earnings_structured(parsed)
+        except json.JSONDecodeError:
+            structured = None
+        markdown = (raw[: last.start()] + raw[last.end() :]).strip()
+
+    return markdown, structured
+
+
+def _normalize_earnings_structured(data: dict[str, Any]) -> dict:
+    confidence = str(data.get("confidence") or "medium").lower()
+    if confidence not in ("low", "medium", "high"):
+        confidence = "medium"
+    surprise = str(data.get("surprise") or "unknown").lower().strip()
+    if surprise not in _EARNINGS_SURPRISES:
+        surprise = "unknown"
+    return {
+        "surprise": surprise,
+        "confidence": confidence,
+        "summary": str(data.get("summary") or "").strip() or None,
+    }
+
+
+def generate_earnings_memo(metrics: dict) -> tuple[str | None, dict | None, str | None]:
+    """Ground Gemini on metrics (+ earnings_context) for Issue #14. Returns (markdown, structured, error)."""
+    symbol = (metrics.get("identity") or {}).get("symbol") or "UNKNOWN"
+    user_prompt = (
+        f"Explain the latest earnings report of {symbol} using ONLY this structured context JSON.\n\n"
+        f"```json\n{json.dumps(metrics, default=str, indent=2)}\n```\n\n"
+        "Produce the earnings memo and trailing JSON surprise verdict as instructed."
+    )
+    content, error = call_gemini(SYSTEM_PROMPT_EARNINGS, user_prompt)
+    if error:
+        return None, None, error
+    markdown, structured = parse_earnings_response(content or "")
+    if not markdown:
+        return None, None, "Gemini returned no usable earnings memo."
+    return markdown, structured, None

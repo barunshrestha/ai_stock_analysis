@@ -101,6 +101,36 @@ export interface MoatCacheLookup {
   updated_at?: string | null;
 }
 
+export interface EarningsStructured {
+  surprise: "beat" | "miss" | "inline" | "unknown";
+  confidence: "low" | "medium" | "high";
+  summary: string | null;
+}
+
+export interface EarningsAnalysis {
+  symbol: string;
+  metrics: Record<string, unknown>;
+  markdown: string;
+  structured: EarningsStructured | null;
+  model: string;
+  disclaimer: string;
+  cached?: boolean;
+  source?: "cache" | "live" | null;
+  updated_at?: string | null;
+}
+
+export interface EarningsCacheLookup {
+  cached: boolean;
+  symbol: string;
+  source?: "cache" | "live" | null;
+  metrics?: Record<string, unknown>;
+  markdown?: string;
+  structured?: EarningsStructured | null;
+  model?: string;
+  disclaimer?: string;
+  updated_at?: string | null;
+}
+
 export interface StockMetrics {
   current_price: number | null;
   daily_change_pct: number | null;
@@ -626,6 +656,13 @@ export const api = {
     }),
   aiMoatCache: (symbol: string) =>
     request<MoatCacheLookup>(`/api/ai/moat/${encodeURIComponent(symbol)}`),
+  aiEarnings: (symbol: string, period = "1y", force = true) =>
+    request<EarningsAnalysis>(`/api/ai/earnings`, {
+      method: "POST",
+      body: JSON.stringify({ symbol, period, force }),
+    }),
+  aiEarningsCache: (symbol: string) =>
+    request<EarningsCacheLookup>(`/api/ai/earnings/${encodeURIComponent(symbol)}`),
   adminIndustries: () =>
     request<{
       industries: Record<string, { symbol: string; company_name: string | null }[]>;

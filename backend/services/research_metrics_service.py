@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime, timezone
 from typing import Any
 
 import pandas as pd
@@ -13,6 +14,199 @@ _SUMMARY_MAX = 700
 
 def _clean(value: Any) -> Any:
     return stock_service._clean(value)
+
+
+def _to_date(value: Any) -> date | None:
+    """Best-effort parse of timestamps / date-like values to a calendar date."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, pd.Timestamp):
+        try:
+            return value.to_pydatetime().date()
+        except Exception:
+            return None
+    if isinstance(value, (int, float)):
+        # Yahoo unix seconds (or ms)
+        ts = float(value)
+        if ts > 1e12:
+            ts /= 1000.0
+        try:
+            return datetime.fromtimestamp(ts, tz=timezone.utc).date()
+        except (OverflowError, OSError, ValueError):
+            return None
+    if isinstance(value, str) and len(value) >= 10:
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+    if hasattr(value, "date") and callable(value.date):
+        try:
+            d = value.date()
+            return d if isinstance(d, date) else None
+        except Exception:
+            return None
+    return None
+
+
+def _col(df: pd.DataFrame, *candidates: str) -> str | None:
+    lower = {str(c).strip().lower(): c for c in df.columns}
+    for name in candidates:
+        if name.lower() in lower:
+            return lower[name.lower()]
+    for key, orig in lower.items():
+        for name in candidates:
+            if name.lower() in key:
+                return orig
+    return None
+
+
+def _price_reaction_pct(hist: pd.DataFrame | None, report_date: date | None, sessions: int = 2) -> float | None:
+    """Close change from 1 session before report to ~1–2 sessions after. Null if unknown."""
+    if hist is None or hist.empty or report_date is None or "Close" not in hist.columns:
+        return None
+    try:
+        closes = hist["Close"].dropna()
+    except Exception:
+        return None
+    if closes.empty:
+        return None
+
+    session_dates: list[date] = []
+    for ts in closes.index:
+        d = _to_date(ts)
+        if d is not None:
+            session_dates.append(d)
+    if len(session_dates) < 3:
+        return None
+
+    # First trading session on or after the report date (falls back to last on/before).
+    on_or_after = [i for i, d in enumerate(session_dates) if d >= report_date]
+    if on_or_after:
+        report_idx = on_or_after[0]
+    else:
+        on_or_before = [i for i, d in enumerate(session_dates) if d <= report_date]
+        if not on_or_before:
+            return None
+        report_idx = on_or_before[-1]
+
+    pre_idx = report_idx - 1
+    post_idx = min(report_idx + max(1, sessions), len(closes) - 1)
+    if pre_idx < 0 or post_idx <= pre_idx:
+        return None
+    pre = float(closes.iloc[pre_idx])
+    post = float(closes.iloc[post_idx])
+    if not pre:
+        return None
+    return round((post - pre) / abs(pre) * 100, 2)
+
+
+def build_earnings_context(symbol: str) -> dict:
+    """
+    Compact earnings pack for Issue #14 grounding.
+
+    Never invents beats/misses — EPS fields stay null when Yahoo has no figures.
+    """
+    sym = symbol.strip().upper()
+    if not sym:
+        raise ValueError("Ticker is required.")
+
+    info = stock_service.get_info(sym) or {}
+    earnings_dates = stock_service.get_earnings_dates(sym)
+    today = date.today()
+
+    last_report_date: str | None = None
+    next_earnings_date: str | None = None
+    eps_actual = None
+    eps_estimate = None
+    surprise_pct = None
+
+    if earnings_dates is not None and not earnings_dates.empty:
+        reported_col = _col(earnings_dates, "Reported EPS", "EPS Actual", "Actual")
+        estimate_col = _col(earnings_dates, "EPS Estimate", "Estimate")
+        surprise_col = _col(earnings_dates, "Surprise(%)", "Surprise %", "Surprise")
+
+        rows: list[dict] = []
+        for ts, row in earnings_dates.iterrows():
+            d = _to_date(ts)
+            if d is None:
+                continue
+            reported = _clean(row.get(reported_col)) if reported_col else None
+            estimate = _clean(row.get(estimate_col)) if estimate_col else None
+            surprise = _clean(row.get(surprise_col)) if surprise_col else None
+            rows.append(
+                {
+                    "date": d,
+                    "reported": reported,
+                    "estimate": estimate,
+                    "surprise": surprise,
+                }
+            )
+
+        # Last report: most recent row with a reported EPS (prefer on/before today).
+        reported_rows = [r for r in rows if isinstance(r["reported"], (int, float))]
+        past_reported = [r for r in reported_rows if r["date"] <= today]
+        last = (past_reported or reported_rows)
+        if last:
+            last = max(last, key=lambda r: r["date"])
+            last_report_date = last["date"].isoformat()
+            eps_actual = last["reported"]
+            eps_estimate = last["estimate"] if isinstance(last["estimate"], (int, float)) else None
+            surprise_pct = last["surprise"] if isinstance(last["surprise"], (int, float)) else None
+            # Derive surprise only when both sides exist — never invent a beat/miss label here.
+            if surprise_pct is None and eps_actual is not None and eps_estimate not in (None, 0):
+                try:
+                    surprise_pct = round(
+                        (float(eps_actual) - float(eps_estimate)) / abs(float(eps_estimate)) * 100, 2
+                    )
+                except (TypeError, ValueError, ZeroDivisionError):
+                    surprise_pct = None
+
+        # Next date: earliest future calendar row (with or without estimate).
+        future = [r for r in rows if r["date"] > today]
+        if future:
+            nxt = min(future, key=lambda r: r["date"])
+            next_earnings_date = nxt["date"].isoformat()
+
+    # Fallback next date from info / calendar-style timestamps when table has none.
+    if next_earnings_date is None:
+        for key in (
+            "earningsTimestampStart",
+            "earningsTimestamp",
+            "earningsDate",
+            "earningsCallTimestampStart",
+        ):
+            d = _to_date(info.get(key))
+            if d is not None and d > today:
+                next_earnings_date = d.isoformat()
+                break
+
+    # Slim revenue history from existing statement builder.
+    statements = stock_service.get_financial_statements(sym)
+    income = statements.get("income_stmt") if statements else None
+    revenue_row = _row_by_label(income, ("Total Revenue", "Operating Revenue", "Revenue"))
+    revenue_history = _pct_series_yoy(revenue_row) if revenue_row is not None else []
+
+    hist = None
+    try:
+        hist = stock_service.get_history(sym, "2y")
+    except Exception:
+        hist = None
+    report_d = date.fromisoformat(last_report_date) if last_report_date else None
+    price_reaction_pct = _price_reaction_pct(hist, report_d, sessions=2)
+
+    return {
+        "last_report_date": last_report_date,
+        "next_earnings_date": next_earnings_date,
+        "eps_actual": eps_actual,
+        "eps_estimate": eps_estimate,
+        "surprise_pct": surprise_pct,
+        "revenue_history": revenue_history,
+        "price_reaction_pct": price_reaction_pct,
+    }
 
 
 def _pct_series_yoy(series: pd.Series) -> list[dict]:

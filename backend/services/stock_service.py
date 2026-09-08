@@ -100,6 +100,19 @@ def get_earnings(symbol: str, years: int = 5) -> pd.DataFrame | None:
     return with_retry(lambda: get_earnings_history(ticker, years=years))
 
 
+@ttl_cache(TTL_FUNDAMENTALS)
+def get_earnings_dates(symbol: str) -> pd.DataFrame | None:
+    """Return yfinance earnings_dates (EPS estimate / reported / surprise) or None."""
+    ticker = get_ticker(symbol)
+    try:
+        df = with_retry(lambda: ticker.earnings_dates)
+    except Exception:
+        return None
+    if df is None or (isinstance(df, pd.DataFrame) and df.empty):
+        return None
+    return df
+
+
 def history_to_records(hist: pd.DataFrame) -> list[dict]:
     records = []
     for ts, row in hist.iterrows():
