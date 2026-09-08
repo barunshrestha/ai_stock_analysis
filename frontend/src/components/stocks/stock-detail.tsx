@@ -17,6 +17,12 @@ import { AiSummary } from "@/components/stocks/ai-summary";
 import { WallStreetAnalysisPanel } from "@/components/stocks/wall-street-analysis";
 import { MoatAnalysisPanel } from "@/components/stocks/moat-analysis";
 import { ValuationAnalysisPanel } from "@/components/stocks/valuation-analysis";
+import { RiskAnalysisPanel } from "@/components/stocks/risk-analysis";
+import { GrowthPotentialPanel } from "@/components/stocks/growth-analysis";
+import { InstitutionalPerspectivePanel } from "@/components/stocks/institutional-analysis";
+import { BullBearDebatePanel } from "@/components/stocks/debate-analysis";
+import { EarningsBreakdownPanel } from "@/components/stocks/earnings-analysis";
+import { BuyVerdictPanel } from "@/components/stocks/buy-verdict-analysis";
 
 function LoadingState() {
   return (
@@ -82,6 +88,12 @@ export function StockDetail({ symbol }: { symbol: string }) {
           <WallStreetAnalysisPanel symbol={symbol} />
           <MoatAnalysisPanel symbol={symbol} />
           <ValuationAnalysisPanel symbol={symbol} />
+          <RiskAnalysisPanel symbol={symbol} />
+          <GrowthPotentialPanel symbol={symbol} />
+          <InstitutionalPerspectivePanel symbol={symbol} />
+          <BullBearDebatePanel symbol={symbol} />
+          <EarningsBreakdownPanel symbol={symbol} />
+          <BuyVerdictPanel symbol={symbol} />
           {data.business_summary && (
             <Card>
               <CardHeader>

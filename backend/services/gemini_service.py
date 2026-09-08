@@ -319,3 +319,575 @@ def generate_valuation_memo(metrics: dict) -> tuple[str | None, dict | None, str
     if not markdown:
         return None, None, "Gemini returned no usable valuation memo."
     return markdown, structured, None
+
+
+SYSTEM_PROMPT_RISK = """You are a senior equity risk analyst.
+Write a clear investment-risk assessment in simple language with professional insights.
+
+Hard rules:
+- Use ONLY the metrics and facts provided in the user message.
+- Never invent regulatory events, lawsuits, or debt figures not supported by the context.
+- If data is missing, say so and discuss the risk qualitatively — do not guess numbers.
+- Rank risks from most dangerous to least dangerous.
+- This is educational / journaling content, not personalized investment advice.
+
+Cover these sections in order, using markdown headings:
+1. Economic risks
+2. Industry disruption
+3. Competition
+4. Regulatory threats
+5. Debt or financial risks
+6. Ranked risk summary (most → least dangerous)
+
+After the markdown memo, end with a single fenced JSON block (and nothing after it) in this exact shape:
+```json
+{
+  "overall_risk": "low" | "medium" | "high",
+  "confidence": "low" | "medium" | "high",
+  "ranked_risks": [
+    { "rank": 1, "category": "economic|disruption|competition|regulatory|financial|other", "title": "...", "severity": "low|medium|high" }
+  ],
+  "summary": "one short sentence"
+}
+```
+Include up to 5 ranked_risks, ordered most → least dangerous.
+"""
+
+_RISK_LEVELS = frozenset({"low", "medium", "high"})
+_RISK_CATEGORIES = frozenset({"economic", "disruption", "competition", "regulatory", "financial", "other"})
+_DEFAULT_RISK_CATEGORIES = ("economic", "disruption", "competition", "regulatory", "financial")
+
+
+def parse_risk_response(raw: str) -> tuple[str, dict | None]:
+    """Split risk markdown from trailing JSON; normalize enums and rank list."""
+    if not raw or not raw.strip():
+        return "", None
+
+    matches = list(_JSON_FENCE_RE.finditer(raw))
+    structured: dict | None = None
+    markdown = raw.strip()
+
+    if matches:
+        last = matches[-1]
+        try:
+            parsed = json.loads(last.group(1))
+            if isinstance(parsed, dict):
+                structured = _normalize_risk_structured(parsed)
+        except json.JSONDecodeError:
+            structured = None
+        markdown = (raw[: last.start()] + raw[last.end() :]).strip()
+
+    return markdown, structured
+
+
+def _normalize_risk_level(value: Any, default: str = "medium") -> str:
+    level = str(value or default).lower().strip()
+    return level if level in _RISK_LEVELS else default
+
+
+def _normalize_risk_category(value: Any) -> str:
+    raw = str(value or "other").lower().strip()
+    return raw if raw in _RISK_CATEGORIES else "other"
+
+
+def _normalize_ranked_risks(raw_list: Any) -> list[dict]:
+    items: list[dict] = []
+    if isinstance(raw_list, list):
+        for entry in raw_list:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                rank = int(entry.get("rank") or 0)
+            except (TypeError, ValueError):
+                rank = 0
+            title = str(entry.get("title") or "").strip() or "Unspecified risk"
+            items.append(
+                {
+                    "rank": rank,
+                    "category": _normalize_risk_category(entry.get("category")),
+                    "title": title,
+                    "severity": _normalize_risk_level(entry.get("severity"), "medium"),
+                }
+            )
+    items.sort(key=lambda x: (x["rank"] if x["rank"] > 0 else 999, x["title"]))
+    if not items:
+        for i, category in enumerate(_DEFAULT_RISK_CATEGORIES, start=1):
+            items.append(
+                {
+                    "rank": i,
+                    "category": category,
+                    "title": f"{category.replace('_', ' ').title()} risk",
+                    "severity": "medium",
+                }
+            )
+    # re-number 1..n and cap at 5
+    out = []
+    for i, item in enumerate(items[:5], start=1):
+        out.append({**item, "rank": i})
+    # pad to 5 with defaults if short
+    used = {x["category"] for x in out}
+    for category in _DEFAULT_RISK_CATEGORIES:
+        if len(out) >= 5:
+            break
+        if category not in used:
+            out.append(
+                {
+                    "rank": len(out) + 1,
+                    "category": category,
+                    "title": f"{category.replace('_', ' ').title()} risk",
+                    "severity": "medium",
+                }
+            )
+            used.add(category)
+    return out[:5]
+
+
+def _normalize_risk_structured(data: dict[str, Any]) -> dict:
+    return {
+        "overall_risk": _normalize_risk_level(data.get("overall_risk"), "medium"),
+        "confidence": _normalize_risk_level(data.get("confidence"), "medium"),
+        "ranked_risks": _normalize_ranked_risks(data.get("ranked_risks")),
+        "summary": str(data.get("summary") or "").strip() or None,
+    }
+
+
+def generate_risk_memo(metrics: dict) -> tuple[str | None, dict | None, str | None]:
+    """Ground Gemini on metrics for Issue #10 risk analysis. Returns (markdown, structured, error)."""
+    symbol = (metrics.get("identity") or {}).get("symbol") or "UNKNOWN"
+    user_prompt = (
+        f"Identify the biggest risks of investing in {symbol} using ONLY this structured context JSON.\n\n"
+        f"```json\n{json.dumps(metrics, default=str, indent=2)}\n```\n\n"
+        "Produce the risk memo and trailing JSON ranking as instructed."
+    )
+    content, error = call_gemini(SYSTEM_PROMPT_RISK, user_prompt)
+    if error:
+        return None, None, error
+    markdown, structured = parse_risk_response(content or "")
+    if not markdown:
+        return None, None, "Gemini returned no usable risk memo."
+    return markdown, structured, None
+
+
+SYSTEM_PROMPT_GROWTH = """You are a senior growth equity analyst.
+Write a clear growth-potential assessment in simple language.
+
+Hard rules:
+- Use ONLY the metrics and facts provided in the user message.
+- Never invent TAM/SAM/market-size figures. If unavailable, say so and reason from growth rates and industry labels only.
+- This is educational / journaling content, not personalized investment advice.
+
+Cover these sections in order, using markdown headings:
+1. Market size context
+2. Industry growth rate
+3. Expansion opportunities
+4. New products
+5. AI or technology advantages
+6. 5–10 year growth outlook
+
+After the markdown memo, end with a single fenced JSON block (and nothing after it) in this exact shape:
+```json
+{
+  "outlook_band": "low" | "moderate" | "high",
+  "confidence": "low" | "medium" | "high",
+  "primary_driver": "short phrase",
+  "five_year_summary": "one short sentence",
+  "ten_year_summary": "one short sentence"
+}
+```
+"""
+
+_OUTLOOK_BANDS = frozenset({"low", "moderate", "high"})
+
+
+def parse_growth_response(raw: str) -> tuple[str, dict | None]:
+    if not raw or not raw.strip():
+        return "", None
+    matches = list(_JSON_FENCE_RE.finditer(raw))
+    structured: dict | None = None
+    markdown = raw.strip()
+    if matches:
+        last = matches[-1]
+        try:
+            parsed = json.loads(last.group(1))
+            if isinstance(parsed, dict):
+                structured = _normalize_growth_structured(parsed)
+        except json.JSONDecodeError:
+            structured = None
+        markdown = (raw[: last.start()] + raw[last.end() :]).strip()
+    return markdown, structured
+
+
+def _normalize_growth_structured(data: dict[str, Any]) -> dict:
+    confidence = str(data.get("confidence") or "medium").lower()
+    if confidence not in ("low", "medium", "high"):
+        confidence = "medium"
+    band = str(data.get("outlook_band") or "moderate").lower().strip()
+    if band not in _OUTLOOK_BANDS:
+        band = "moderate"
+    return {
+        "outlook_band": band,
+        "confidence": confidence,
+        "primary_driver": str(data.get("primary_driver") or "").strip() or None,
+        "five_year_summary": str(data.get("five_year_summary") or "").strip() or None,
+        "ten_year_summary": str(data.get("ten_year_summary") or "").strip() or None,
+    }
+
+
+def generate_growth_memo(metrics: dict) -> tuple[str | None, dict | None, str | None]:
+    symbol = (metrics.get("identity") or {}).get("symbol") or "UNKNOWN"
+    user_prompt = (
+        f"Analyze the future growth potential of {symbol} using ONLY this structured context JSON.\n\n"
+        f"```json\n{json.dumps(metrics, default=str, indent=2)}\n```\n\n"
+        "Produce the growth memo and trailing JSON outlook as instructed."
+    )
+    content, error = call_gemini(SYSTEM_PROMPT_GROWTH, user_prompt)
+    if error:
+        return None, None, error
+    markdown, structured = parse_growth_response(content or "")
+    if not markdown:
+        return None, None, "Gemini returned no usable growth memo."
+    return markdown, structured, None
+
+
+SYSTEM_PROMPT_INSTITUTIONAL = """You are a hedge fund portfolio manager writing an educational journal note.
+Evaluate whether the stock is a good long-term institutional holding.
+
+Hard rules:
+- Use ONLY the metrics and facts provided in the user message.
+- Never invent catalysts, filings, or ownership figures not in the context.
+- This is educational / journaling content, not personalized investment advice.
+
+Cover these sections in order, using markdown headings:
+1. Why institutions might buy
+2. Why they might avoid
+3. Key catalysts
+4. Investment thesis
+
+After the markdown memo, end with a single fenced JSON block (and nothing after it) in this exact shape:
+```json
+{
+  "stance": "attractive" | "mixed" | "unattractive",
+  "confidence": "low" | "medium" | "high",
+  "buy_reasons": ["..."],
+  "avoid_reasons": ["..."],
+  "catalysts": ["..."],
+  "thesis_one_liner": "..."
+}
+```
+"""
+
+_INST_STANCES = frozenset({"attractive", "mixed", "unattractive"})
+
+
+def parse_institutional_response(raw: str) -> tuple[str, dict | None]:
+    if not raw or not raw.strip():
+        return "", None
+    matches = list(_JSON_FENCE_RE.finditer(raw))
+    structured: dict | None = None
+    markdown = raw.strip()
+    if matches:
+        last = matches[-1]
+        try:
+            parsed = json.loads(last.group(1))
+            if isinstance(parsed, dict):
+                structured = _normalize_institutional_structured(parsed)
+        except json.JSONDecodeError:
+            structured = None
+        markdown = (raw[: last.start()] + raw[last.end() :]).strip()
+    return markdown, structured
+
+
+def _string_list(value: Any, limit: int = 5) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out = []
+    for item in value:
+        s = str(item or "").strip()
+        if s:
+            out.append(s)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _normalize_institutional_structured(data: dict[str, Any]) -> dict:
+    confidence = str(data.get("confidence") or "medium").lower()
+    if confidence not in ("low", "medium", "high"):
+        confidence = "medium"
+    stance = str(data.get("stance") or "mixed").lower().strip()
+    if stance not in _INST_STANCES:
+        stance = "mixed"
+    return {
+        "stance": stance,
+        "confidence": confidence,
+        "buy_reasons": _string_list(data.get("buy_reasons")),
+        "avoid_reasons": _string_list(data.get("avoid_reasons")),
+        "catalysts": _string_list(data.get("catalysts")),
+        "thesis_one_liner": str(data.get("thesis_one_liner") or "").strip() or None,
+    }
+
+
+def generate_institutional_memo(metrics: dict) -> tuple[str | None, dict | None, str | None]:
+    symbol = (metrics.get("identity") or {}).get("symbol") or "UNKNOWN"
+    user_prompt = (
+        f"Act like a hedge fund PM and evaluate whether {symbol} is a good long-term investment "
+        f"using ONLY this structured context JSON.\n\n"
+        f"```json\n{json.dumps(metrics, default=str, indent=2)}\n```\n\n"
+        "Produce the institutional memo and trailing JSON as instructed."
+    )
+    content, error = call_gemini(SYSTEM_PROMPT_INSTITUTIONAL, user_prompt)
+    if error:
+        return None, None, error
+    markdown, structured = parse_institutional_response(content or "")
+    if not markdown:
+        return None, None, "Gemini returned no usable institutional memo."
+    return markdown, structured, None
+
+
+SYSTEM_PROMPT_DEBATE = """You are moderating a debate between two equity analysts.
+Write a clear bull vs bear debate in simple language.
+
+Hard rules:
+- Use ONLY the metrics and facts provided in the user message.
+- Both sides must be data-backed from the context; never invent catalysts.
+- This is educational / journaling content, not personalized investment advice.
+
+Cover these sections in order, using markdown headings:
+1. Bull case
+2. Bear case
+3. Balanced conclusion
+
+After the markdown memo, end with a single fenced JSON block (and nothing after it) in this exact shape:
+```json
+{
+  "bull_score": 1-10,
+  "bear_score": 1-10,
+  "winner": "bull" | "bear" | "draw",
+  "confidence": "low" | "medium" | "high",
+  "conclusion_one_liner": "..."
+}
+```
+"""
+
+_DEBATE_WINNERS = frozenset({"bull", "bear", "draw"})
+
+
+def parse_debate_response(raw: str) -> tuple[str, dict | None]:
+    if not raw or not raw.strip():
+        return "", None
+    matches = list(_JSON_FENCE_RE.finditer(raw))
+    structured: dict | None = None
+    markdown = raw.strip()
+    if matches:
+        last = matches[-1]
+        try:
+            parsed = json.loads(last.group(1))
+            if isinstance(parsed, dict):
+                structured = _normalize_debate_structured(parsed)
+        except json.JSONDecodeError:
+            structured = None
+        markdown = (raw[: last.start()] + raw[last.end() :]).strip()
+    return markdown, structured
+
+
+def _clamp_score(value: Any, default: int = 5) -> int:
+    try:
+        score = int(round(float(value)))
+    except (TypeError, ValueError):
+        score = default
+    return max(1, min(10, score))
+
+
+def _normalize_debate_structured(data: dict[str, Any]) -> dict:
+    confidence = str(data.get("confidence") or "medium").lower()
+    if confidence not in ("low", "medium", "high"):
+        confidence = "medium"
+    winner = str(data.get("winner") or "draw").lower().strip()
+    if winner not in _DEBATE_WINNERS:
+        winner = "draw"
+    return {
+        "bull_score": _clamp_score(data.get("bull_score")),
+        "bear_score": _clamp_score(data.get("bear_score")),
+        "winner": winner,
+        "confidence": confidence,
+        "conclusion_one_liner": str(data.get("conclusion_one_liner") or "").strip() or None,
+    }
+
+
+def generate_debate_memo(metrics: dict) -> tuple[str | None, dict | None, str | None]:
+    symbol = (metrics.get("identity") or {}).get("symbol") or "UNKNOWN"
+    user_prompt = (
+        f"Create a bull vs bear debate about {symbol} using ONLY this structured context JSON.\n\n"
+        f"```json\n{json.dumps(metrics, default=str, indent=2)}\n```\n\n"
+        "Produce the debate memo and trailing JSON scores as instructed."
+    )
+    content, error = call_gemini(SYSTEM_PROMPT_DEBATE, user_prompt)
+    if error:
+        return None, None, error
+    markdown, structured = parse_debate_response(content or "")
+    if not markdown:
+        return None, None, "Gemini returned no usable debate memo."
+    return markdown, structured, None
+
+
+SYSTEM_PROMPT_EARNINGS = """You are an equity analyst explaining the latest earnings report.
+Write a clear earnings breakdown in simple language.
+
+Hard rules:
+- Use ONLY the metrics and facts provided (including any `earnings_context` block).
+- Never invent beats, misses, guidance, or market reactions not in the context.
+- If expectations or reaction data are missing, say so explicitly.
+- This is educational / journaling content, not personalized investment advice.
+
+Cover these sections in order, using markdown headings:
+1. Revenue vs expectations
+2. Profit vs expectations
+3. Key metrics investors watch
+4. Management guidance
+5. Market reaction
+
+After the markdown memo, end with a single fenced JSON block (and nothing after it) in this exact shape:
+```json
+{
+  "surprise": "beat" | "miss" | "inline" | "unknown",
+  "confidence": "low" | "medium" | "high",
+  "summary": "one short sentence"
+}
+```
+"""
+
+_EARNINGS_SURPRISES = frozenset({"beat", "miss", "inline", "unknown"})
+
+
+def parse_earnings_response(raw: str) -> tuple[str, dict | None]:
+    if not raw or not raw.strip():
+        return "", None
+    matches = list(_JSON_FENCE_RE.finditer(raw))
+    structured: dict | None = None
+    markdown = raw.strip()
+    if matches:
+        last = matches[-1]
+        try:
+            parsed = json.loads(last.group(1))
+            if isinstance(parsed, dict):
+                structured = _normalize_earnings_structured(parsed)
+        except json.JSONDecodeError:
+            structured = None
+        markdown = (raw[: last.start()] + raw[last.end() :]).strip()
+    return markdown, structured
+
+
+def _normalize_earnings_structured(data: dict[str, Any]) -> dict:
+    confidence = str(data.get("confidence") or "medium").lower()
+    if confidence not in ("low", "medium", "high"):
+        confidence = "medium"
+    surprise = str(data.get("surprise") or "unknown").lower().strip()
+    if surprise not in _EARNINGS_SURPRISES:
+        surprise = "unknown"
+    return {
+        "surprise": surprise,
+        "confidence": confidence,
+        "summary": str(data.get("summary") or "").strip() or None,
+    }
+
+
+def generate_earnings_memo(metrics: dict) -> tuple[str | None, dict | None, str | None]:
+    symbol = (metrics.get("identity") or {}).get("symbol") or "UNKNOWN"
+    user_prompt = (
+        f"Explain the latest earnings report of {symbol} using ONLY this structured context JSON.\n\n"
+        f"```json\n{json.dumps(metrics, default=str, indent=2)}\n```\n\n"
+        "Produce the earnings breakdown and trailing JSON as instructed."
+    )
+    content, error = call_gemini(SYSTEM_PROMPT_EARNINGS, user_prompt)
+    if error:
+        return None, None, error
+    markdown, structured = parse_earnings_response(content or "")
+    if not markdown:
+        return None, None, "Gemini returned no usable earnings memo."
+    return markdown, structured, None
+
+
+SYSTEM_PROMPT_VERDICT = """You are writing an educational stock journal verdict — NOT personalized financial advice.
+Evaluate whether the ticker looks like a Buy, Hold, or Avoid for journaling purposes only.
+
+Hard rules:
+- Use ONLY the metrics and facts provided in the user message.
+- Never invent catalysts or risks not supported by the context.
+- Always remind the reader this is educational journaling, not advice.
+- Verdict must be Buy, Hold, or Avoid (use Avoid instead of Sell).
+
+Cover these sections in order, using markdown headings:
+1. Short-term outlook (1 year)
+2. Long-term outlook (5+ years)
+3. Key catalysts
+4. Major risks
+5. Final verdict: Buy / Hold / Avoid with rationale
+
+After the markdown memo, end with a single fenced JSON block (and nothing after it) in this exact shape:
+```json
+{
+  "verdict": "buy" | "hold" | "avoid",
+  "confidence": "low" | "medium" | "high",
+  "horizon_fit": "short" | "long" | "both" | "neither",
+  "summary": "one short sentence"
+}
+```
+"""
+
+_VERDICTS = frozenset({"buy", "hold", "avoid"})
+_HORIZONS = frozenset({"short", "long", "both", "neither"})
+
+
+def parse_verdict_response(raw: str) -> tuple[str, dict | None]:
+    if not raw or not raw.strip():
+        return "", None
+    matches = list(_JSON_FENCE_RE.finditer(raw))
+    structured: dict | None = None
+    markdown = raw.strip()
+    if matches:
+        last = matches[-1]
+        try:
+            parsed = json.loads(last.group(1))
+            if isinstance(parsed, dict):
+                structured = _normalize_verdict_structured(parsed)
+        except json.JSONDecodeError:
+            structured = None
+        markdown = (raw[: last.start()] + raw[last.end() :]).strip()
+    return markdown, structured
+
+
+def _normalize_verdict_structured(data: dict[str, Any]) -> dict:
+    confidence = str(data.get("confidence") or "medium").lower()
+    if confidence not in ("low", "medium", "high"):
+        confidence = "medium"
+    verdict = str(data.get("verdict") or "hold").lower().strip()
+    if verdict == "sell":
+        verdict = "avoid"
+    if verdict not in _VERDICTS:
+        verdict = "hold"
+    horizon = str(data.get("horizon_fit") or "both").lower().strip()
+    if horizon not in _HORIZONS:
+        horizon = "both"
+    return {
+        "verdict": verdict,
+        "confidence": confidence,
+        "horizon_fit": horizon,
+        "summary": str(data.get("summary") or "").strip() or None,
+    }
+
+
+def generate_verdict_memo(metrics: dict) -> tuple[str | None, dict | None, str | None]:
+    symbol = (metrics.get("identity") or {}).get("symbol") or "UNKNOWN"
+    user_prompt = (
+        f"Evaluate whether {symbol} is a good investment today for an educational journal "
+        f"using ONLY this structured context JSON.\n\n"
+        f"```json\n{json.dumps(metrics, default=str, indent=2)}\n```\n\n"
+        "Produce the verdict memo and trailing JSON as instructed."
+    )
+    content, error = call_gemini(SYSTEM_PROMPT_VERDICT, user_prompt)
+    if error:
+        return None, None, error
+    markdown, structured = parse_verdict_response(content or "")
+    if not markdown:
+        return None, None, "Gemini returned no usable verdict memo."
+    return markdown, structured, None
