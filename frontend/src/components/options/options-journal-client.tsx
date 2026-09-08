@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Pencil, Plus } from "lucide-react";
 
-import { api } from "@/lib/api";
+import { api, type OptionTrade } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -12,11 +13,24 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DeleteTradeDialog } from "@/components/options/delete-trade-dialog";
 import { STRATEGY_LABELS } from "@/components/options/constants";
+import { OptionsDashboard } from "@/components/options/dashboard/options-dashboard";
+
+function mergeTrades(...lists: OptionTrade[][]): OptionTrade[] {
+  const byId = new Map<number, OptionTrade>();
+  for (const list of lists) {
+    for (const t of list) byId.set(t.id, t);
+  }
+  return Array.from(byId.values()).sort((a, b) => b.executed_at.localeCompare(a.executed_at));
+}
 
 export function OptionsJournalClient() {
   const openQ = useQuery({ queryKey: ["options-trades", "open"], queryFn: () => api.optionsTrades({ status: "open" }) });
   const closedQ = useQuery({ queryKey: ["options-trades", "closed"], queryFn: () => api.optionsTrades({ status: "closed" }) });
   const assignedQ = useQuery({ queryKey: ["options-trades", "assigned"], queryFn: () => api.optionsTrades({ status: "assigned" }) });
+  const expiredQ = useQuery({
+    queryKey: ["options-trades", "expired"],
+    queryFn: () => api.optionsTrades({ status: "expired" }),
+  });
   const alertsQ = useQuery({
     queryKey: ["csp-monitoring-summary"],
     queryFn: () => api.cspMonitoringSummary(),
@@ -24,6 +38,21 @@ export function OptionsJournalClient() {
   });
 
   const alertByTrade = new Map((alertsQ.data?.alerts ?? []).map((a) => [a.trade_id, a]));
+
+  const allTrades = useMemo(
+    () =>
+      mergeTrades(
+        openQ.data?.trades ?? [],
+        closedQ.data?.trades ?? [],
+        assignedQ.data?.trades ?? [],
+        expiredQ.data?.trades ?? [],
+      ),
+    [openQ.data, closedQ.data, assignedQ.data, expiredQ.data],
+  );
+
+  const dashboardLoading =
+    openQ.isPending || closedQ.isPending || assignedQ.isPending || expiredQ.isPending;
+  const dashboardError = openQ.isError || closedQ.isError || assignedQ.isError || expiredQ.isError;
 
   return (
     <div className="space-y-6">
@@ -42,12 +71,20 @@ export function OptionsJournalClient() {
         </Button>
       </div>
 
-      <Tabs defaultValue="open">
+      <Tabs defaultValue="dashboard">
         <TabsList>
+          <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
           <TabsTrigger value="open">Open</TabsTrigger>
           <TabsTrigger value="closed">Closed</TabsTrigger>
           <TabsTrigger value="assigned">Assigned</TabsTrigger>
         </TabsList>
+        <TabsContent value="dashboard" className="mt-4">
+          <OptionsDashboard
+            trades={allTrades}
+            isLoading={dashboardLoading}
+            isError={dashboardError}
+          />
+        </TabsContent>
         <TabsContent value="open" className="mt-4">
           <TradeList query={openQ} empty="No open trades." alertByTrade={alertByTrade} />
         </TabsContent>
@@ -67,7 +104,7 @@ function TradeList({
   empty,
   alertByTrade,
 }: {
-  query: ReturnType<typeof useQuery<{ trades: import("@/lib/api").OptionTrade[] }>>;
+  query: ReturnType<typeof useQuery<{ trades: OptionTrade[] }>>;
   empty: string;
   alertByTrade?: Map<number, import("@/lib/api").CspMonitoringAlert>;
 }) {
