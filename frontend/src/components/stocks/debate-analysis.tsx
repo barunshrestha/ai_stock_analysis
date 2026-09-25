@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SignedInAction } from "@/components/auth/signed-in-action";
 
 function geminiErrorMessage(error: unknown): string {
   if (error instanceof ApiError && error.status === 503) {
@@ -148,26 +149,28 @@ export function BullBearDebatePanel({ symbol }: { symbol: string }) {
               Use cached
             </Button>
           )}
-          <Button
-            size="sm"
-            variant={displayed || hasCache ? "outline" : "default"}
-            disabled={busy}
-            onClick={() => generateMut.mutate()}
-          >
-            {generateMut.isPending ? (
-              <>
-                <Loader2 className="size-4 animate-spin" />
-                Generating…
-              </>
-            ) : hasCache || displayed ? (
-              <>
-                <RefreshCw className="size-4" />
-                Regenerate
-              </>
-            ) : (
-              "Generate"
-            )}
-          </Button>
+          <SignedInAction>
+            <Button
+              size="sm"
+              variant={displayed || hasCache ? "outline" : "default"}
+              disabled={busy}
+              onClick={() => generateMut.mutate()}
+            >
+              {generateMut.isPending ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Generating…
+                </>
+              ) : hasCache || displayed ? (
+                <>
+                  <RefreshCw className="size-4" />
+                  Regenerate
+                </>
+              ) : (
+                "Generate"
+              )}
+            </Button>
+          </SignedInAction>
         </div>
       </CardHeader>
       <CardContent>

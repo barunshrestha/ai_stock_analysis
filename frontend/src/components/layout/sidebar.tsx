@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { TrendingUp } from "lucide-react";
+import { useAuth } from "@clerk/nextjs";
+import { Lock, TrendingUp } from "lucide-react";
 
 import { NAV_ITEMS } from "@/lib/nav";
 import { cn } from "@/lib/utils";
@@ -10,6 +11,7 @@ import { cn } from "@/lib/utils";
 /** Desktop / tablet sidebar. Pure navigation — no settings or inputs (PRD req 7). */
 export function Sidebar() {
   const pathname = usePathname();
+  const { isSignedIn } = useAuth();
 
   return (
     <aside className="hidden md:flex md:w-56 lg:w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar">
@@ -38,6 +40,9 @@ export function Sidebar() {
             >
               <item.icon className="size-4" />
               {item.title}
+              {item.requiresAuth && isSignedIn === false && (
+                <Lock className="ml-auto size-3.5" aria-label="Sign in required" />
+              )}
             </Link>
           );
         })}

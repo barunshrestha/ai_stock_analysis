@@ -1,5 +1,7 @@
 /** Typed client for the FastAPI backend (see PRD.md section 7). */
 
+import { getToken } from "@clerk/nextjs";
+
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -13,21 +15,44 @@ export class ApiError extends Error {
   }
 }
 
+/** Bearer header for the signed-in user; empty when signed out or outside the browser. */
+async function authHeader(): Promise<Record<string, string>> {
+  if (typeof window === "undefined") return {};
+  try {
+    const token = await getToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    // Clerk offline / not loaded: send the request unauthenticated and let the API answer 401.
+    return {};
+  }
+}
+
+async function authorizedFetch(path: string, init?: RequestInit): Promise<Response> {
+  return fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: { ...(await authHeader()), ...init?.headers },
+  });
+}
+
+async function throwIfNotOk(res: Response): Promise<void> {
+  if (res.ok) return;
+  let detail = res.statusText;
+  try {
+    const body = await res.json();
+    detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+  } catch {
+    // keep statusText
+  }
+  if (res.status === 401) detail = "Please sign in to continue.";
+  throw new ApiError(res.status, detail);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await authorizedFetch(path, {
     ...init,
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.json();
-      detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
-    } catch {
-      // keep statusText
-    }
-    throw new ApiError(res.status, detail);
-  }
+  await throwIfNotOk(res);
   return res.json() as Promise<T>;
 }
 
@@ -785,20 +810,11 @@ export const api = {
     const form = new FormData();
     form.append("file", file);
     const qs = portfolioId ? `?portfolio_id=${portfolioId}` : "";
-    const res = await fetch(`${API_BASE}/api/portfolio/import-csv${qs}`, {
+    const res = await authorizedFetch(`/api/portfolio/import-csv${qs}`, {
       method: "POST",
       body: form,
     });
-    if (!res.ok) {
-      let detail = res.statusText;
-      try {
-        const body = await res.json();
-        detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
-      } catch {
-        /* keep statusText */
-      }
-      throw new ApiError(res.status, detail);
-    }
+    await throwIfNotOk(res);
     return res.json() as Promise<PortfolioImportResult>;
   },
   removeFromPortfolio: (symbol: string, portfolioId?: number) =>
@@ -958,20 +974,11 @@ export const api = {
     const form = new FormData();
     form.append("file", file);
     if (broker) form.append("broker", broker);
-    const res = await fetch(`${API_BASE}/api/options/parse-image`, {
+    const res = await authorizedFetch(`/api/options/parse-image`, {
       method: "POST",
       body: form,
     });
-    if (!res.ok) {
-      let detail = res.statusText;
-      try {
-        const body = await res.json();
-        detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
-      } catch {
-        /* keep statusText */
-      }
-      throw new ApiError(res.status, detail);
-    }
+    await throwIfNotOk(res);
     return res.json() as Promise<ParseImageResult>;
   },
   optionsTrades: (params?: { status?: string; ticker?: string }) => {

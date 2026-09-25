@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
+from backend.auth import CurrentUser, get_current_user
 from backend.deps import get_db
 from backend.services import news_service
 
@@ -20,8 +21,8 @@ def news_feed(
 
 
 @router.get("/portfolio")
-def portfolio_news(db=Depends(get_db)):
-    symbols = db.get_all_portfolio_symbols() or db.get_portfolio() or []
+def portfolio_news(db=Depends(get_db), user: CurrentUser = Depends(get_current_user)):
+    symbols = db.get_all_portfolio_symbols(user.id)
     items = news_service.get_portfolio_news(symbols)
     return {"symbols": symbols, "items": items}
 

@@ -233,6 +233,37 @@ This project follows:
 | `PGUSER` | Database user | `stock_user` |
 | `PGPASSWORD` | Database password | `your_password` |
 | `PGDATABASE` | Database name | `stock_analysis` |
+| `CLERK_ISSUER` | Clerk Frontend API URL (backend verifies tokens against it) | `https://your-app.clerk.accounts.dev` |
+| `ADMIN_EMAILS` | Emails that get the admin role | `you@example.com` |
+| `LEGACY_OWNER_USER_ID` | Clerk user id that inherits pre-auth data | `user_2abc...` |
+| `AI_RATE_LIMIT_PER_HOUR` | AI generations per user per hour | `30` |
+
+## Authentication setup
+
+The Next.js app signs users in with [Clerk](https://clerk.com); the FastAPI backend verifies the
+Clerk session token on every private request and scopes data to that user.
+
+**Public (no account):** home, stock search and stock pages, news, cached AI memos.
+**Signed-in only:** Portfolio, Options journal and notes, DCA, Automation, Industries, and generating AI memos.
+**Admin only:** changing industry assignments.
+
+1. Create an application in the Clerk Dashboard and enable the sign-in methods you want (email, Google).
+2. Add the email to the session token so admin roles work: **Configure → Sessions → Customize session token**:
+   ```json
+   { "email": "{{user.primary_email_address}}" }
+   ```
+3. Frontend keys go in `frontend/.env.local` (see `frontend/.env.local.example`):
+   `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`.
+4. Backend settings go in `.env` / `.env.dev-local` (see `env.example`):
+   `CLERK_ISSUER` (the Frontend API URL), `ADMIN_EMAILS`, and optionally `CLERK_AUTHORIZED_PARTIES`
+   (defaults to `CORS_ORIGINS`; must include the frontend origin, e.g. `http://localhost:3003`).
+5. **Keep your existing data:** sign in once, copy your user id (`user_...`) from Clerk Dashboard → Users,
+   set `LEGACY_OWNER_USER_ID` to it, and restart the backend. Portfolios, trades, and notes created
+   before auth existed are assigned to you; until then they are hidden from everyone.
+
+Notes:
+- The AI rate limit is in-memory per API process; use Redis if you run multiple backend workers.
+- The legacy Streamlit `app.py` is not multi-user aware and is unsupported with auth enabled.
 
 ## Contributing
 

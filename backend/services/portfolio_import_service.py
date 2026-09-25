@@ -58,9 +58,9 @@ def parse_portfolio_csv(content: bytes) -> tuple[list[str], str | None]:
     return symbols, None
 
 
-def import_portfolio_symbols(symbols: list[str], db, portfolio_id: int | None = None) -> dict:
-    """Validate and add symbols; cache company info from Yahoo when possible."""
-    pid = portfolio_id or db.ensure_default_portfolio()
+def import_portfolio_symbols(symbols: list[str], db, portfolio_id: int) -> dict:
+    """Validate and add symbols to an ownership-checked bucket; cache company info from Yahoo when possible."""
+    pid = portfolio_id
     existing = set(db.get_portfolio(pid) or [])
     results: list[dict] = []
     added = skipped = failed = 0
