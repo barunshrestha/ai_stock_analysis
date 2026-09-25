@@ -35,12 +35,14 @@ export function EconomicCalendarStrip() {
         </div>
       ) : isError ? (
         <p className="text-sm text-muted-foreground">Could not load economic calendar.</p>
-      ) : !data.finnhub_configured ? (
+      ) : !data.calendar_configured ? (
         <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-          Add <code className="rounded bg-muted px-1">FINNHUB_API_KEY</code> to your{" "}
+          Add <code className="rounded bg-muted px-1">GEMINI_API_KEY</code> to your{" "}
           <code className="rounded bg-muted px-1">.env</code> for the US economic release
-          calendar (free at finnhub.io).
+          calendar.
         </p>
+      ) : data.calendar_error ? (
+        <p className="text-sm text-muted-foreground">{data.calendar_error}</p>
       ) : data.events.length === 0 ? (
         <p className="text-sm text-muted-foreground">No US releases scheduled this week.</p>
       ) : (

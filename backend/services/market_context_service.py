@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from backend.cache import ttl_cache
 from backend.config import TTL_MARKET_CONTEXT
-from backend.services import news_service, stock_service
+from backend.services import economic_calendar_service, news_service, stock_service
 
 
 def _index_change(symbol: str) -> tuple[float | None, float | None]:
@@ -44,7 +44,8 @@ def get_market_context() -> dict:
 
     label_key, label_display, impact = _sentiment_label(spy_chg, qqq_chg, vix_level, vix_chg)
 
-    events, finnhub_ok = news_service.get_economic_calendar(7)
+    calendar = economic_calendar_service.get_economic_calendar(7)
+    events = calendar["events"]
     high_events = [e for e in events if e.get("impact") == "high"][:8]
     all_events = events[:12]
 
@@ -76,7 +77,8 @@ def get_market_context() -> dict:
             "impact": impact,
         },
         "economic_events": all_events,
-        "finnhub_configured": finnhub_ok,
+        "calendar_configured": calendar["configured"],
+        "calendar_error": calendar["error"],
         "catalysts": {
             "earnings_headlines": earnings_headlines,
             "market_headlines": market_headlines,

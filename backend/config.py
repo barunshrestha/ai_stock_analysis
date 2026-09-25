@@ -52,8 +52,6 @@ ADMIN_EMAILS = {email.lower() for email in _csv_env("ADMIN_EMAILS")}
 LEGACY_OWNER_USER_ID = os.getenv("LEGACY_OWNER_USER_ID", "").strip()
 AI_RATE_LIMIT_PER_HOUR = int(os.getenv("AI_RATE_LIMIT_PER_HOUR", "30"))
 
-FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
-
 # Gemini (Issue #6 Wall Street–style research memo)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")

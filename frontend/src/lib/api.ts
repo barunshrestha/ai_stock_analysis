@@ -547,9 +547,9 @@ export interface EconomicEvent {
   event: string;
   country: string;
   impact: "high" | "medium" | "low";
-  actual: number | null;
-  estimate: number | null;
-  previous: number | null;
+  actual: string | null;
+  estimate: string | null;
+  previous: string | null;
 }
 
 export type StrategyType =
@@ -657,7 +657,8 @@ export interface MarketContext {
     impact: string;
   };
   economic_events: EconomicEvent[];
-  finnhub_configured: boolean;
+  calendar_configured: boolean;
+  calendar_error: string | null;
   catalysts: {
     earnings_headlines: NewsItem[];
     market_headlines: NewsItem[];
@@ -933,7 +934,8 @@ export const api = {
   newsCalendar: (days = 7) =>
     request<{
       days: number;
-      finnhub_configured: boolean;
+      calendar_configured: boolean;
+      calendar_error: string | null;
       events: EconomicEvent[];
     }>(`/api/news/calendar?days=${days}`),
 
