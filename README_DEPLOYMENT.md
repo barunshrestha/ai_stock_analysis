@@ -80,7 +80,7 @@ cd frontend && npm install
 # DATABASE_URL=postgresql://user:pass@localhost:5432/stock_analysis
 # OLLAMA_BASE_URL=http://localhost:11434   (optional)
 # OLLAMA_MODEL=gemma3:4b                   (optional)
-# FINNHUB_API_KEY=your_free_key            (optional — economic calendar on Dashboard)
+# GEMINI_API_KEY=your_key                  (AI memos + economic calendar on Dashboard)
 ```
 
 ---
@@ -95,7 +95,7 @@ Runs PostgreSQL + backend + frontend in containers. Services use
 
 ```bash
 cd /Users/barunshrestha/Projects/Agents/ai_stock_analysis
-cp .env.example .env   # edit FINNHUB_API_KEY etc. if needed
+cp .env.example .env   # edit GEMINI_API_KEY etc. if needed
 ./docker-start.sh
 ```
 

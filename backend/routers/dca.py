@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from backend.auth import get_current_user
 from backend.services import dca_service
 
-router = APIRouter(prefix="/api/dca", tags=["dca"])
+router = APIRouter(prefix="/api/dca", tags=["dca"], dependencies=[Depends(get_current_user)])
 
 
 class BacktestRequest(BaseModel):

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { SignInButton, useAuth } from "@clerk/nextjs";
 import { useQuery } from "@tanstack/react-query";
 import { Briefcase } from "lucide-react";
 
@@ -11,10 +12,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export function PortfolioNews() {
+  const { isLoaded, isSignedIn } = useAuth();
   const { data, isPending, isError } = useQuery({
     queryKey: ["news-portfolio"],
     queryFn: () => api.newsPortfolio(),
     staleTime: 5 * 60_000,
+    enabled: isSignedIn === true,
   });
 
   return (
@@ -23,7 +26,16 @@ export function PortfolioNews() {
         <Briefcase className="size-4 text-muted-foreground" />
         <h2 className="text-lg font-semibold tracking-tight">Your Portfolio News</h2>
       </div>
-      {isPending ? (
+      {isLoaded && !isSignedIn ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed px-4 py-3">
+          <p className="text-sm text-muted-foreground">
+            Sign in to see headlines for the stocks in your portfolio.
+          </p>
+          <SignInButton mode="redirect">
+            <Button size="sm" variant="outline">Sign in</Button>
+          </SignInButton>
+        </div>
+      ) : isPending ? (
         <div className="flex gap-2 overflow-hidden">
           {Array.from({ length: 3 }).map((_, i) => (
             <Skeleton key={i} className="h-24 w-72 shrink-0" />

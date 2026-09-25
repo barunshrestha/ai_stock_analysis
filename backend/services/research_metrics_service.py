@@ -133,12 +133,12 @@ def build_research_metrics(symbol: str, period: str = "1y") -> dict:
     if len(summary) > _SUMMARY_MAX:
         summary = summary[:_SUMMARY_MAX].rstrip() + "…"
 
-    close = hist["Close"]
+    close = hist["Close"].dropna()
     change_6m = None
     if len(close) > 126:
         past = float(close.iloc[-127])
         if past:
-            change_6m = round((float(close.iloc[-1]) - past) / past * 100, 2)
+            change_6m = _clean(round((float(close.iloc[-1]) - past) / past * 100, 2))
 
     peers = _peer_symbols(info)
     peer_comps = _peer_snapshots(peers, exclude=sym, limit=3)

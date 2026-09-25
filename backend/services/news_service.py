@@ -1,11 +1,11 @@
-"""News aggregation: RSS feeds, Yahoo portfolio news, optional Finnhub calendar."""
+"""News aggregation: RSS feeds and Yahoo portfolio news."""
 
 from __future__ import annotations
 
 import hashlib
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
 
@@ -15,10 +15,8 @@ from curl_cffi import requests as cf_requests
 from backend.cache import ttl_cache
 from backend.config import (
     EARNINGS_KEYWORDS,
-    FINNHUB_API_KEY,
     NEWS_RSS_FEEDS,
     TTL_NEWS,
-    TTL_NEWS_CALENDAR,
     TTL_NEWS_PORTFOLIO,
 )
 from yahoo_session import get_ticker, with_retry
@@ -213,57 +211,3 @@ def _get_portfolio_news_cached(symbols_key: tuple[str, ...]) -> list[dict]:
 def get_portfolio_news(symbols: list[str]) -> list[dict]:
     key = tuple(sorted(s.upper() for s in symbols if s.strip()))
     return _get_portfolio_news_cached(key)
-
-
-def _impact_label(event: str) -> str:
-    upper = event.upper()
-    if any(k in upper for k in ("CPI", "FOMC", "NFP", "NONFARM", "GDP", "PCE", "FED")):
-        return "high"
-    if any(k in upper for k in ("PPI", "JOBLESS", "RETAIL", "PMI", "HOUSING")):
-        return "medium"
-    return "low"
-
-
-@ttl_cache(TTL_NEWS_CALENDAR)
-def get_economic_calendar(days: int = 7) -> tuple[list[dict], bool]:
-    """Returns (events, finnhub_configured)."""
-    if not FINNHUB_API_KEY:
-        return [], False
-    start = date.today()
-    end = start + timedelta(days=max(1, min(days, 14)))
-    try:
-        resp = _SESSION.get(
-            "https://finnhub.io/api/v1/calendar/economic",
-            params={
-                "from": start.isoformat(),
-                "to": end.isoformat(),
-                "token": FINNHUB_API_KEY,
-            },
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception:
-        return [], True
-    events: list[dict] = []
-    for row in data.get("economicCalendar") or []:
-        country = row.get("country")
-        if country and country not in ("US", "USA"):
-            continue
-        event_date = row.get("date") or row.get("time") or ""
-        event_name = row.get("event") or "Economic release"
-        events.append(
-            {
-                "id": _item_id(f"{event_date}{event_name}", event_name),
-                "date": event_date[:10] if event_date else start.isoformat(),
-                "time": row.get("time"),
-                "event": event_name,
-                "country": row.get("country") or "US",
-                "impact": _impact_label(event_name),
-                "actual": row.get("actual"),
-                "estimate": row.get("estimate"),
-                "previous": row.get("prev"),
-            }
-        )
-    events.sort(key=lambda e: e.get("date") or "")
-    return events[:50], True

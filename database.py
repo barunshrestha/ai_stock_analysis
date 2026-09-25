@@ -89,12 +89,25 @@ class CashFlowStatement(Base):
     value = Column(Float)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class User(Base):
+    """App user, keyed by the identity provider's (Clerk) user id."""
+    __tablename__ = 'users'
+
+    id = Column(String(64), primary_key=True)
+    email = Column(String(320))
+    role = Column(String(20), nullable=False, default='user')
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_seen_at = Column(DateTime, default=datetime.utcnow)
+
+
 class PortfolioBucket(Base):
     """Named portfolio container (user can have multiple)."""
     __tablename__ = 'portfolio_buckets'
+    __table_args__ = (UniqueConstraint('user_id', 'name', name='uq_portfolio_bucket_user_name'),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String(100), nullable=False, unique=True)
+    user_id = Column(String(64), ForeignKey('users.id', ondelete='CASCADE'), index=True)
+    name = Column(String(100), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     holdings = relationship('Portfolio', back_populates='bucket', cascade='all, delete-orphan')
@@ -128,6 +141,7 @@ class OptionsTrade(Base):
     __tablename__ = 'options_trades'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(64), ForeignKey('users.id', ondelete='CASCADE'), index=True)
     status = Column(String(20), nullable=False, default='open')
     strategy_type = Column(String(40), nullable=False)
     ticker = Column(String(10), nullable=False)
@@ -169,9 +183,10 @@ class OptionsLeg(Base):
 class TickerAnalysisNote(Base):
     """User analysis notes keyed by ticker + note type (e.g. liquidity)."""
     __tablename__ = 'ticker_analysis_notes'
-    __table_args__ = (UniqueConstraint('ticker', 'note_key', name='uq_ticker_note_key'),)
+    __table_args__ = (UniqueConstraint('user_id', 'ticker', 'note_key', name='uq_ticker_note_user_key'),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(64), ForeignKey('users.id', ondelete='CASCADE'), index=True)
     ticker = Column(String(10), nullable=False)
     note_key = Column(String(40), nullable=False)
     content = Column(Text, nullable=False, default='')
@@ -212,6 +227,7 @@ class DatabaseManager:
         try:
             Base.metadata.create_all(bind=self.engine)
             self._migrate_portfolio_buckets()
+            self._migrate_user_ownership()
             logger.info("Database tables created successfully")
         except Exception as e:
             logger.error(f"Error creating database tables: {e}")
@@ -266,6 +282,88 @@ class DatabaseManager:
                 )
             )
         logger.info("Portfolio migration complete")
+
+    # Tables whose rows belong to a single user.
+    _USER_OWNED_TABLES = ('portfolio_buckets', 'options_trades', 'ticker_analysis_notes')
+
+    def _migrate_user_ownership(self):
+        """Idempotent upgrade to per-user rows; rows with NULL user_id stay invisible to every user."""
+        from sqlalchemy import text
+
+        with self.engine.begin() as conn:
+            for table in self._USER_OWNED_TABLES:
+                conn.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS user_id VARCHAR(64) "
+                    f"REFERENCES users(id) ON DELETE CASCADE"
+                ))
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_user_id ON {table} (user_id)"))
+
+            conn.execute(text("ALTER TABLE portfolio_buckets DROP CONSTRAINT IF EXISTS portfolio_buckets_name_key"))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_portfolio_bucket_user_name ON portfolio_buckets (user_id, name)"
+            ))
+            conn.execute(text("ALTER TABLE ticker_analysis_notes DROP CONSTRAINT IF EXISTS uq_ticker_note_key"))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_ticker_note_user_key "
+                "ON ticker_analysis_notes (user_id, ticker, note_key)"
+            ))
+
+        self._assign_legacy_rows()
+
+    def _assign_legacy_rows(self):
+        """Give pre-auth rows to LEGACY_OWNER_USER_ID so the original owner keeps their data."""
+        from sqlalchemy import text
+
+        owner_id = os.getenv('LEGACY_OWNER_USER_ID', '').strip()
+        if not owner_id:
+            return
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (id, role, created_at, last_seen_at) VALUES (:id, 'user', NOW(), NOW()) "
+                     "ON CONFLICT (id) DO NOTHING"),
+                {'id': owner_id},
+            )
+            for table in self._USER_OWNED_TABLES:
+                result = conn.execute(
+                    text(f"UPDATE {table} SET user_id = :id WHERE user_id IS NULL"), {'id': owner_id}
+                )
+                if result.rowcount:
+                    logger.info("Assigned %s legacy %s rows to owner", result.rowcount, table)
+
+    # ---------- Users ----------
+
+    def upsert_user(self, user_id: str, email: str | None, make_admin: bool = False) -> dict:
+        """Create the user on first sight; refresh email/last_seen. Admin is granted, never revoked, here."""
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            return self._upsert_user_once(user_id, email, make_admin)
+        except IntegrityError:
+            # A concurrent first request inserted the row; the retry takes the update path.
+            return self._upsert_user_once(user_id, email, make_admin)
+
+    def _upsert_user_once(self, user_id: str, email: str | None, make_admin: bool) -> dict:
+        session = self.get_session()
+        try:
+            user = session.query(User).filter(User.id == user_id).first()
+            now = datetime.utcnow()
+            if user is None:
+                user = User(id=user_id, email=email, role='admin' if make_admin else 'user',
+                            created_at=now, last_seen_at=now)
+                session.add(user)
+            else:
+                if email and user.email != email:
+                    user.email = email
+                if make_admin and user.role != 'admin':
+                    user.role = 'admin'
+                user.last_seen_at = now
+            session.commit()
+            return {'id': user.id, 'email': user.email, 'role': user.role}
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
     
     def get_session(self):
         """Get a database session"""
@@ -882,14 +980,19 @@ class DatabaseManager:
         finally:
             session.close()
     
-    def ensure_default_portfolio(self) -> int:
-        """Return default portfolio bucket id, creating 'My Portfolio' if needed."""
+    def ensure_default_portfolio(self, user_id: str) -> int | None:
+        """Return the user's first portfolio bucket id, creating 'My Portfolio' if they have none."""
         session = self.get_session()
         try:
-            bucket = session.query(PortfolioBucket).order_by(PortfolioBucket.id).first()
+            bucket = (
+                session.query(PortfolioBucket)
+                .filter(PortfolioBucket.user_id == user_id)
+                .order_by(PortfolioBucket.id)
+                .first()
+            )
             if bucket:
                 return bucket.id
-            bucket = PortfolioBucket(name='My Portfolio')
+            bucket = PortfolioBucket(user_id=user_id, name='My Portfolio')
             session.add(bucket)
             session.commit()
             session.refresh(bucket)
@@ -897,14 +1000,19 @@ class DatabaseManager:
         except Exception as e:
             session.rollback()
             logger.error(f"Error ensuring default portfolio: {e}")
-            return 1
+            return None
         finally:
             session.close()
 
-    def list_portfolio_buckets(self) -> list[dict]:
+    def list_portfolio_buckets(self, user_id: str) -> list[dict]:
         session = self.get_session()
         try:
-            buckets = session.query(PortfolioBucket).order_by(PortfolioBucket.created_at).all()
+            buckets = (
+                session.query(PortfolioBucket)
+                .filter(PortfolioBucket.user_id == user_id)
+                .order_by(PortfolioBucket.created_at)
+                .all()
+            )
             out = []
             for b in buckets:
                 count = session.query(Portfolio).filter(Portfolio.portfolio_id == b.id).count()
@@ -923,16 +1031,20 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def create_portfolio_bucket(self, name: str) -> dict | None:
+    def create_portfolio_bucket(self, user_id: str, name: str) -> dict | None:
         session = self.get_session()
         try:
             clean = name.strip()
             if not clean:
                 return None
-            existing = session.query(PortfolioBucket).filter(PortfolioBucket.name == clean).first()
+            existing = (
+                session.query(PortfolioBucket)
+                .filter(PortfolioBucket.user_id == user_id, PortfolioBucket.name == clean)
+                .first()
+            )
             if existing:
                 return None
-            bucket = PortfolioBucket(name=clean)
+            bucket = PortfolioBucket(user_id=user_id, name=clean)
             session.add(bucket)
             session.commit()
             session.refresh(bucket)
@@ -944,10 +1056,15 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def get_portfolio_bucket(self, portfolio_id: int) -> dict | None:
+    def get_portfolio_bucket(self, user_id: str, portfolio_id: int) -> dict | None:
+        """The bucket if it exists and belongs to user_id; otherwise None."""
         session = self.get_session()
         try:
-            bucket = session.query(PortfolioBucket).filter(PortfolioBucket.id == portfolio_id).first()
+            bucket = (
+                session.query(PortfolioBucket)
+                .filter(PortfolioBucket.id == portfolio_id, PortfolioBucket.user_id == user_id)
+                .first()
+            )
             if not bucket:
                 return None
             count = session.query(Portfolio).filter(Portfolio.portfolio_id == portfolio_id).count()
@@ -958,9 +1075,10 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def add_to_portfolio(self, symbol, portfolio_id: int | None = None):
+    # Holding methods take a portfolio_id the caller has already verified via get_portfolio_bucket(user_id, ...).
+
+    def add_to_portfolio(self, symbol, portfolio_id: int):
         """Add a stock symbol to a portfolio bucket"""
-        portfolio_id = portfolio_id or self.ensure_default_portfolio()
         session = self.get_session()
         try:
             existing = (
@@ -984,9 +1102,8 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def remove_from_portfolio(self, symbol, portfolio_id: int | None = None):
+    def remove_from_portfolio(self, symbol, portfolio_id: int):
         """Remove a stock symbol from a portfolio bucket"""
-        portfolio_id = portfolio_id or self.ensure_default_portfolio()
         session = self.get_session()
         try:
             deleted = (
@@ -1006,9 +1123,8 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def get_portfolio(self, portfolio_id: int | None = None):
+    def get_portfolio(self, portfolio_id: int):
         """Retrieve all stock symbols in a portfolio bucket"""
-        portfolio_id = portfolio_id or self.ensure_default_portfolio()
         session = self.get_session()
         try:
             records = (
@@ -1026,11 +1142,18 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def get_all_portfolio_symbols(self) -> list[str]:
-        """All unique symbols across every portfolio bucket."""
+    def get_all_portfolio_symbols(self, user_id: str) -> list[str]:
+        """All unique symbols across the user's portfolio buckets."""
         session = self.get_session()
         try:
-            rows = session.query(Portfolio.symbol).distinct().order_by(Portfolio.symbol).all()
+            rows = (
+                session.query(Portfolio.symbol)
+                .join(PortfolioBucket, Portfolio.portfolio_id == PortfolioBucket.id)
+                .filter(PortfolioBucket.user_id == user_id)
+                .distinct()
+                .order_by(Portfolio.symbol)
+                .all()
+            )
             return [r[0] for r in rows]
         except Exception as e:
             logger.error(f"Error retrieving all portfolio symbols: {e}")
@@ -1038,9 +1161,8 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def save_portfolio(self, symbols, portfolio_id: int | None = None):
+    def save_portfolio(self, symbols, portfolio_id: int):
         """Replace holdings in a portfolio bucket"""
-        portfolio_id = portfolio_id or self.ensure_default_portfolio()
         session = self.get_session()
         try:
             session.query(Portfolio).filter(Portfolio.portfolio_id == portfolio_id).delete()
@@ -1058,10 +1180,14 @@ class DatabaseManager:
 
     # --- Options trade journal ---
 
-    def create_options_trade(self, trade_data: dict, legs: list[dict]) -> dict | None:
+    @staticmethod
+    def _owned_trade_query(session, user_id: str, trade_id: int):
+        return session.query(OptionsTrade).filter(OptionsTrade.id == trade_id, OptionsTrade.user_id == user_id)
+
+    def create_options_trade(self, user_id: str, trade_data: dict, legs: list[dict]) -> dict | None:
         session = self.get_session()
         try:
-            trade = OptionsTrade(**trade_data)
+            trade = OptionsTrade(**{**trade_data, 'user_id': user_id})
             session.add(trade)
             session.flush()
             for leg in legs:
@@ -1076,10 +1202,10 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def get_options_trade(self, trade_id: int) -> dict | None:
+    def get_options_trade(self, user_id: str, trade_id: int) -> dict | None:
         session = self.get_session()
         try:
-            trade = session.query(OptionsTrade).filter(OptionsTrade.id == trade_id).first()
+            trade = self._owned_trade_query(session, user_id, trade_id).first()
             if not trade:
                 return None
             return self._options_trade_to_dict(trade, session)
@@ -1089,10 +1215,14 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def list_options_trades(self, status: str | None = None, ticker: str | None = None) -> list[dict]:
+    def list_options_trades(self, user_id: str, status: str | None = None, ticker: str | None = None) -> list[dict]:
         session = self.get_session()
         try:
-            q = session.query(OptionsTrade).order_by(OptionsTrade.executed_at.desc())
+            q = (
+                session.query(OptionsTrade)
+                .filter(OptionsTrade.user_id == user_id)
+                .order_by(OptionsTrade.executed_at.desc())
+            )
             if status:
                 q = q.filter(OptionsTrade.status == status)
             if ticker:
@@ -1105,10 +1235,12 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def update_options_trade(self, trade_id: int, trade_data: dict, legs: list[dict] | None = None) -> dict | None:
+    def update_options_trade(
+        self, user_id: str, trade_id: int, trade_data: dict, legs: list[dict] | None = None
+    ) -> dict | None:
         session = self.get_session()
         try:
-            trade = session.query(OptionsTrade).filter(OptionsTrade.id == trade_id).first()
+            trade = self._owned_trade_query(session, user_id, trade_id).first()
             if not trade:
                 return None
             if trade.status != 'open':
@@ -1130,10 +1262,10 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def close_options_trade(self, trade_id: int, close_data: dict) -> dict | None:
+    def close_options_trade(self, user_id: str, trade_id: int, close_data: dict) -> dict | None:
         session = self.get_session()
         try:
-            trade = session.query(OptionsTrade).filter(OptionsTrade.id == trade_id).first()
+            trade = self._owned_trade_query(session, user_id, trade_id).first()
             if not trade or trade.status != 'open':
                 return None
             for key, val in close_data.items():
@@ -1149,10 +1281,10 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def delete_options_trade(self, trade_id: int) -> bool:
+    def delete_options_trade(self, user_id: str, trade_id: int) -> bool:
         session = self.get_session()
         try:
-            trade = session.query(OptionsTrade).filter(OptionsTrade.id == trade_id).first()
+            trade = self._owned_trade_query(session, user_id, trade_id).first()
             if not trade:
                 return False
             session.delete(trade)
@@ -1206,12 +1338,13 @@ class DatabaseManager:
             ],
         }
 
-    def get_ticker_analysis_note(self, ticker: str, note_key: str) -> dict | None:
+    def get_ticker_analysis_note(self, user_id: str, ticker: str, note_key: str) -> dict | None:
         session = self.get_session()
         try:
             row = (
                 session.query(TickerAnalysisNote)
                 .filter(
+                    TickerAnalysisNote.user_id == user_id,
                     TickerAnalysisNote.ticker == ticker.upper(),
                     TickerAnalysisNote.note_key == note_key,
                 )
@@ -1231,13 +1364,14 @@ class DatabaseManager:
         finally:
             session.close()
 
-    def upsert_ticker_analysis_note(self, ticker: str, note_key: str, content: str) -> dict | None:
+    def upsert_ticker_analysis_note(self, user_id: str, ticker: str, note_key: str, content: str) -> dict | None:
         session = self.get_session()
         try:
             ticker = ticker.upper().strip()
             row = (
                 session.query(TickerAnalysisNote)
                 .filter(
+                    TickerAnalysisNote.user_id == user_id,
                     TickerAnalysisNote.ticker == ticker,
                     TickerAnalysisNote.note_key == note_key,
                 )
@@ -1247,7 +1381,7 @@ class DatabaseManager:
                 row.content = content
                 row.updated_at = datetime.utcnow()
             else:
-                row = TickerAnalysisNote(ticker=ticker, note_key=note_key, content=content)
+                row = TickerAnalysisNote(user_id=user_id, ticker=ticker, note_key=note_key, content=content)
                 session.add(row)
             session.commit()
             session.refresh(row)

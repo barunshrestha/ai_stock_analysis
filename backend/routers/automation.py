@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from backend.auth import get_current_user
 from scanner import scan_stock
 
-router = APIRouter(prefix="/api/automation", tags=["automation"])
+router = APIRouter(prefix="/api/automation", tags=["automation"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/{symbol}")

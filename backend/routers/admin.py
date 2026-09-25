@@ -1,14 +1,21 @@
-"""Admin endpoints for stock-industry assignments (existing stock_industry table)."""
+"""Admin endpoints for stock-industry assignments (existing stock_industry table).
+
+Reads are open to any signed-in user (the Portfolio page's "by industry" view uses them);
+changes require the admin role.
+"""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from backend.auth import get_current_user, require_admin
 from backend.deps import get_db
 from backend.services.grid_service import build_grid_rows
 
-router = APIRouter(prefix="/api/admin/industries", tags=["admin"])
+router = APIRouter(
+    prefix="/api/admin/industries", tags=["admin"], dependencies=[Depends(get_current_user)]
+)
 
 
 class AssignRequest(BaseModel):
@@ -40,7 +47,7 @@ def industry_grid(industry: str, db=Depends(get_db), period: str = Query("1y")):
     return {"industry": industry, "rows": rows, "errors": errors}
 
 
-@router.post("/assign", status_code=201)
+@router.post("/assign", status_code=201, dependencies=[Depends(require_admin)])
 def assign_stock(req: AssignRequest, db=Depends(get_db)):
     symbol = req.symbol.upper()
     results = {}
@@ -55,7 +62,7 @@ def assign_stock(req: AssignRequest, db=Depends(get_db)):
     return {"symbol": symbol, "results": results}
 
 
-@router.put("/stock/{symbol}")
+@router.put("/stock/{symbol}", dependencies=[Depends(require_admin)])
 def set_stock_industries(symbol: str, req: SetIndustriesRequest, db=Depends(get_db)):
     """Replace all industry assignments for a symbol."""
     symbol = symbol.upper()
@@ -66,7 +73,7 @@ def set_stock_industries(symbol: str, req: SetIndustriesRequest, db=Depends(get_
     return {"symbol": symbol, "industries": industries}
 
 
-@router.delete("/stock/{symbol}/{industry}")
+@router.delete("/stock/{symbol}/{industry}", dependencies=[Depends(require_admin)])
 def remove_assignment(symbol: str, industry: str, db=Depends(get_db)):
     symbol = symbol.upper()
     ok, err = db.admin_remove_stock_from_industry(symbol, industry)

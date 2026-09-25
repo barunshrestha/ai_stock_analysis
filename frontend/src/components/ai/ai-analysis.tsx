@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SignedInAction } from "@/components/auth/signed-in-action";
 import { TrendChart } from "@/components/stocks/trend-chart";
 import { WallStreetAnalysisPanel } from "@/components/stocks/wall-street-analysis";
 import { MoatAnalysisPanel } from "@/components/stocks/moat-analysis";
@@ -126,24 +127,26 @@ function PointCard({
               />
             </Button>
           )}
-          <Button
-            size="sm"
-            variant={mutation.data ? "ghost" : "outline"}
-            className="h-7 text-xs"
-            disabled={mutation.isPending}
-            onClick={() => {
-              setOpenContent(true);
-              mutation.mutate();
-            }}
-          >
-            {mutation.isPending ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : mutation.data ? (
-              "Re-run"
-            ) : (
-              "Analyze"
-            )}
-          </Button>
+          <SignedInAction label="Sign in" className="h-7 text-xs">
+            <Button
+              size="sm"
+              variant={mutation.data ? "ghost" : "outline"}
+              className="h-7 text-xs"
+              disabled={mutation.isPending}
+              onClick={() => {
+                setOpenContent(true);
+                mutation.mutate();
+              }}
+            >
+              {mutation.isPending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : mutation.data ? (
+                "Re-run"
+              ) : (
+                "Analyze"
+              )}
+            </Button>
+          </SignedInAction>
         </div>
       </CardHeader>
       {(mutation.isPending || mutation.isError || (mutation.data && openContent)) && (

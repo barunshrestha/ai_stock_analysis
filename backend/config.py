@@ -38,7 +38,19 @@ TTL_MARKET_CONTEXT = 5 * 60
 TTL_OPTIONS_CHAIN = 60
 TTL_OPTIONS_MONITOR = 60
 
-FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
+def _csv_env(name: str, default: str = "") -> list[str]:
+    return [item.strip() for item in os.getenv(name, default).split(",") if item.strip()]
+
+
+# Auth (Clerk). Issuer is the Clerk Frontend API URL, e.g. https://your-app.clerk.accounts.dev
+CLERK_ISSUER = os.getenv("CLERK_ISSUER", "").rstrip("/")
+CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL", "") or (f"{CLERK_ISSUER}/.well-known/jwks.json" if CLERK_ISSUER else "")
+# Frontend origins allowed in the token's `azp` claim; defaults to CORS origins.
+CLERK_AUTHORIZED_PARTIES = _csv_env("CLERK_AUTHORIZED_PARTIES") or CORS_ORIGINS
+ADMIN_EMAILS = {email.lower() for email in _csv_env("ADMIN_EMAILS")}
+# Clerk user id that inherits rows created before multi-user support.
+LEGACY_OWNER_USER_ID = os.getenv("LEGACY_OWNER_USER_ID", "").strip()
+AI_RATE_LIMIT_PER_HOUR = int(os.getenv("AI_RATE_LIMIT_PER_HOUR", "30"))
 
 # Gemini (Issue #6 Wall Street–style research memo)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")

@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from backend.config import GEMINI_MODEL
 from backend.deps import get_db
+from backend.rate_limit import enforce_ai_rate_limit
 from backend.services import (
     gemini_service,
     ollama_service,
@@ -16,6 +17,9 @@ from backend.services import (
 )
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
+
+# Cached memo reads (GET) are public; generation costs model credits, so it needs a signed-in user under budget.
+_GENERATE = [Depends(enforce_ai_rate_limit)]
 
 WALL_STREET_ANALYSIS_TYPE = "wall_street"
 MOAT_ANALYSIS_TYPE = "moat"
@@ -141,7 +145,7 @@ def list_points():
     }
 
 
-@router.post("/summary")
+@router.post("/summary", dependencies=_GENERATE)
 def ai_summary(req: SummaryRequest):
     symbol = req.symbol.upper()
     try:
@@ -157,7 +161,7 @@ def ai_summary(req: SummaryRequest):
     return {"symbol": symbol, "summary": content}
 
 
-@router.post("/point")
+@router.post("/point", dependencies=_GENERATE)
 def ai_point(req: PointRequest):
     symbol = req.symbol.upper()
     try:
@@ -197,7 +201,7 @@ def get_wall_street_cache(ticker: str, db=Depends(get_db)):
     )
 
 
-@router.post("/wall-street")
+@router.post("/wall-street", dependencies=_GENERATE)
 def wall_street_analysis(req: WallStreetRequest, db=Depends(get_db)):
     """Issue #6: yFinance metrics pack + Gemini research memo (always live; upserts cache)."""
     symbol = req.symbol.strip().upper()
@@ -257,7 +261,7 @@ def get_moat_cache(ticker: str, db=Depends(get_db)):
     )
 
 
-@router.post("/moat")
+@router.post("/moat", dependencies=_GENERATE)
 def moat_analysis(req: MoatRequest, db=Depends(get_db)):
     """Issue #8: competitive moat memo via Gemini (always live; upserts cache)."""
     symbol = req.symbol.strip().upper()
@@ -317,7 +321,7 @@ def get_valuation_cache(ticker: str, db=Depends(get_db)):
     )
 
 
-@router.post("/valuation")
+@router.post("/valuation", dependencies=_GENERATE)
 def valuation_analysis(req: ValuationRequest, db=Depends(get_db)):
     """Issue #9: valuation memo with deterministic DCF sketch + Gemini (upserts cache)."""
     symbol = req.symbol.strip().upper()
@@ -428,7 +432,7 @@ def get_risk_cache(ticker: str, db=Depends(get_db)):
     return _cached_memo_route(ticker, RISK_ANALYSIS_TYPE, db)
 
 
-@router.post("/risk")
+@router.post("/risk", dependencies=_GENERATE)
 def risk_analysis(req: RiskRequest, db=Depends(get_db)):
     """Issue #10: ranked risk memo via Gemini (always live; upserts cache)."""
     return _live_memo_route(
@@ -445,7 +449,7 @@ def get_growth_cache(ticker: str, db=Depends(get_db)):
     return _cached_memo_route(ticker, GROWTH_ANALYSIS_TYPE, db)
 
 
-@router.post("/growth")
+@router.post("/growth", dependencies=_GENERATE)
 def growth_analysis(req: GrowthRequest, db=Depends(get_db)):
     """Issue #11: growth potential memo via Gemini (always live; upserts cache)."""
     return _live_memo_route(
@@ -462,7 +466,7 @@ def get_institutional_cache(ticker: str, db=Depends(get_db)):
     return _cached_memo_route(ticker, INSTITUTIONAL_ANALYSIS_TYPE, db)
 
 
-@router.post("/institutional")
+@router.post("/institutional", dependencies=_GENERATE)
 def institutional_analysis(req: InstitutionalRequest, db=Depends(get_db)):
     """Issue #12: institutional PM perspective via Gemini (always live; upserts cache)."""
     return _live_memo_route(
@@ -479,7 +483,7 @@ def get_debate_cache(ticker: str, db=Depends(get_db)):
     return _cached_memo_route(ticker, DEBATE_ANALYSIS_TYPE, db)
 
 
-@router.post("/debate")
+@router.post("/debate", dependencies=_GENERATE)
 def debate_analysis(req: DebateRequest, db=Depends(get_db)):
     """Issue #13: bull vs bear debate via Gemini (always live; upserts cache)."""
     return _live_memo_route(
@@ -500,7 +504,7 @@ def get_earnings_cache(ticker: str, db=Depends(get_db)):
     return _cached_memo_route(ticker, EARNINGS_ANALYSIS_TYPE, db)
 
 
-@router.post("/earnings")
+@router.post("/earnings", dependencies=_GENERATE)
 def earnings_analysis(req: EarningsRequest, db=Depends(get_db)):
     """Issue #14: earnings report breakdown via Gemini (always live; upserts cache)."""
     return _live_memo_route(
@@ -518,7 +522,7 @@ def get_verdict_cache(ticker: str, db=Depends(get_db)):
     return _cached_memo_route(ticker, VERDICT_ANALYSIS_TYPE, db)
 
 
-@router.post("/verdict")
+@router.post("/verdict", dependencies=_GENERATE)
 def verdict_analysis(req: VerdictRequest, db=Depends(get_db)):
     """Issue #15: Buy/Hold/Avoid journal verdict via Gemini (always live; upserts cache)."""
     return _live_memo_route(

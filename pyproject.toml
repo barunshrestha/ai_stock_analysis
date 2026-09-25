@@ -19,6 +19,7 @@ dependencies = [
     "pillow>=10.0.0",
     "py-vollib>=1.0.1",
     "google-genai>=1.0.0",
+    "pyjwt[crypto]>=2.8.0",
 ]
 # Optional OCR: pip install pytesseract + install Tesseract binary on the host
 

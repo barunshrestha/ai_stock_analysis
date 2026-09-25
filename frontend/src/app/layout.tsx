@@ -1,10 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { ClerkProvider } from "@clerk/nextjs";
 
 import { Providers } from "./providers";
-import { Sidebar } from "@/components/layout/sidebar";
-import { Topbar } from "@/components/layout/topbar";
-import { BottomNav } from "@/components/layout/bottom-nav";
+import { AppShell } from "@/components/layout/app-shell";
 
 import "./globals.css";
 
@@ -29,19 +28,11 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}
       >
-        <Providers>
-          <div className="flex min-h-dvh">
-            <Sidebar />
-            <div className="flex min-w-0 flex-1 flex-col">
-              <Topbar />
-              {/* pb-20 reserves space for the mobile bottom tab bar */}
-              <main className="flex-1 px-4 pb-20 pt-4 md:px-6 md:pb-6">
-                {children}
-              </main>
-            </div>
-          </div>
-          <BottomNav />
-        </Providers>
+        <ClerkProvider signInUrl="/sign-in" signUpUrl="/sign-up">
+          <Providers>
+            <AppShell>{children}</AppShell>
+          </Providers>
+        </ClerkProvider>
       </body>
     </html>
   );

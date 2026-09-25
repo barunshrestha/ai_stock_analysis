@@ -6,6 +6,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
+from backend.auth import CurrentUser, get_current_user
 from backend.deps import get_db
 from backend.schemas.options import (
     STRATEGY_META,
@@ -26,7 +27,7 @@ from backend.services import (
     options_pretrade_service,
 )
 
-router = APIRouter(prefix="/api/options", tags=["options"])
+router = APIRouter(prefix="/api/options", tags=["options"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/strategies")
@@ -49,8 +50,9 @@ def get_ticker_note(
     ticker: str,
     note_key: str = Query("liquidity", min_length=1, max_length=40),
     db=Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
 ):
-    note = db.get_ticker_analysis_note(ticker, note_key)
+    note = db.get_ticker_analysis_note(user.id, ticker, note_key)
     if not note:
         return {"ticker": ticker.strip().upper(), "note_key": note_key, "content": "", "updated_at": None}
     return note
@@ -62,8 +64,9 @@ def upsert_ticker_note(
     body: TickerNoteUpsert,
     note_key: str = Query("liquidity", min_length=1, max_length=40),
     db=Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
 ):
-    saved = db.upsert_ticker_analysis_note(ticker, note_key, body.content)
+    saved = db.upsert_ticker_analysis_note(user.id, ticker, note_key, body.content)
     if not saved:
         raise HTTPException(status_code=500, detail="Could not save note.")
     return saved
@@ -82,8 +85,8 @@ def csp_screen(req: CspScreenRequest):
 
 
 @router.get("/trades/{trade_id}/monitor")
-def monitor_trade(trade_id: int, db=Depends(get_db)):
-    trade = db.get_options_trade(trade_id)
+def monitor_trade(trade_id: int, db=Depends(get_db), user: CurrentUser = Depends(get_current_user)):
+    trade = db.get_options_trade(user.id, trade_id)
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found.")
     if trade["status"] != "open":
@@ -110,9 +113,9 @@ def monitor_trade(trade_id: int, db=Depends(get_db)):
 
 
 @router.get("/monitoring/summary")
-def monitoring_summary(db=Depends(get_db)):
+def monitoring_summary(db=Depends(get_db), user: CurrentUser = Depends(get_current_user)):
     """Alert badges for open CSP trades in the journal."""
-    trades = db.list_options_trades(status="open")
+    trades = db.list_options_trades(user.id, status="open")
     alerts = []
     from datetime import date as date_cls
 
@@ -177,13 +180,13 @@ async def parse_image(
 
 
 @router.post("/trades")
-def create_trade(trade: OptionTradeCreate, db=Depends(get_db)):
+def create_trade(trade: OptionTradeCreate, db=Depends(get_db), user: CurrentUser = Depends(get_current_user)):
     metrics = options_metrics_service.compute_metrics(trade)
     advisory = options_advisory_service.build_advisory(
         trade.strategy_type.value, metrics, trade.ticker
     )
     trade_row, leg_rows = options_metrics_service.trade_to_db_payload(trade, metrics, advisory)
-    saved = db.create_options_trade(trade_row, leg_rows)
+    saved = db.create_options_trade(user.id, trade_row, leg_rows)
     if not saved:
         raise HTTPException(status_code=500, detail="Failed to save trade.")
     return saved
@@ -194,21 +197,27 @@ def list_trades(
     status: str | None = Query(None, pattern="^(open|closed|assigned|expired)$"),
     ticker: str | None = None,
     db=Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
 ):
-    return {"trades": db.list_options_trades(status=status, ticker=ticker)}
+    return {"trades": db.list_options_trades(user.id, status=status, ticker=ticker)}
 
 
 @router.get("/trades/{trade_id}")
-def get_trade(trade_id: int, db=Depends(get_db)):
-    trade = db.get_options_trade(trade_id)
+def get_trade(trade_id: int, db=Depends(get_db), user: CurrentUser = Depends(get_current_user)):
+    trade = db.get_options_trade(user.id, trade_id)
     if not trade:
         raise HTTPException(status_code=404, detail="Trade not found.")
     return trade
 
 
 @router.patch("/trades/{trade_id}")
-def update_trade(trade_id: int, body: OptionTradeUpdate, db=Depends(get_db)):
-    existing = db.get_options_trade(trade_id)
+def update_trade(
+    trade_id: int,
+    body: OptionTradeUpdate,
+    db=Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    existing = db.get_options_trade(user.id, trade_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Trade not found.")
     if existing["status"] != "open":
@@ -234,15 +243,20 @@ def update_trade(trade_id: int, body: OptionTradeUpdate, db=Depends(get_db)):
     )
     trade_row, leg_rows = options_metrics_service.trade_to_db_payload(merged, metrics, advisory)
     trade_row.pop("status", None)
-    updated = db.update_options_trade(trade_id, trade_row, leg_rows)
+    updated = db.update_options_trade(user.id, trade_id, trade_row, leg_rows)
     if not updated:
         raise HTTPException(status_code=500, detail="Failed to update trade.")
     return updated
 
 
 @router.patch("/trades/{trade_id}/close")
-def close_trade(trade_id: int, body: OptionTradeClose, db=Depends(get_db)):
-    existing = db.get_options_trade(trade_id)
+def close_trade(
+    trade_id: int,
+    body: OptionTradeClose,
+    db=Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    existing = db.get_options_trade(user.id, trade_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Trade not found.")
     if existing["status"] != "open":
@@ -262,14 +276,14 @@ def close_trade(trade_id: int, body: OptionTradeClose, db=Depends(get_db)):
         "close_net_per_contract": body.close_net_per_contract,
         "realized_pnl": pnl,
     }
-    updated = db.close_options_trade(trade_id, close_data)
+    updated = db.close_options_trade(user.id, trade_id, close_data)
     if not updated:
         raise HTTPException(status_code=500, detail="Failed to close trade.")
     return updated
 
 
 @router.delete("/trades/{trade_id}")
-def delete_trade(trade_id: int, db=Depends(get_db)):
-    if not db.delete_options_trade(trade_id):
+def delete_trade(trade_id: int, db=Depends(get_db), user: CurrentUser = Depends(get_current_user)):
+    if not db.delete_options_trade(user.id, trade_id):
         raise HTTPException(status_code=404, detail="Trade not found.")
     return {"deleted": True, "id": trade_id}

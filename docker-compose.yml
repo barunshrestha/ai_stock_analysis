@@ -41,7 +41,13 @@ services:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma3:4b}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3002,http://127.0.0.1:3002}
-      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+      CLERK_ISSUER: ${CLERK_ISSUER:-}
+      CLERK_AUTHORIZED_PARTIES: ${CLERK_AUTHORIZED_PARTIES:-http://localhost:3002,http://127.0.0.1:3002}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      LEGACY_OWNER_USER_ID: ${LEGACY_OWNER_USER_ID:-}
+      AI_RATE_LIMIT_PER_HOUR: ${AI_RATE_LIMIT_PER_HOUR:-30}
     ports:
       - "8000:8000"
     depends_on:
@@ -56,7 +62,13 @@ services:
       args:
         # Browser-side URL of the backend (NEXT_PUBLIC_* is baked at build time).
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-}
     restart: unless-stopped
+    environment:
+      # Server-side only; read at runtime, never baked into the client bundle.
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+      NEXT_PUBLIC_CLERK_SIGN_IN_URL: /sign-in
+      NEXT_PUBLIC_CLERK_SIGN_UP_URL: /sign-up
     ports:
       - "3002:3000"
     depends_on:

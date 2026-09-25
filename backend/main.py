@@ -13,9 +13,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import CORS_ORIGINS
+from backend.json_response import SafeJSONResponse
 from backend.routers import admin, ai, automation, dca, news, options, portfolio, search, stocks
 
 app = FastAPI(
+    default_response_class=SafeJSONResponse,
     title="AI Stock Analysis API",
     description="Backend for the professional redesign (see PRD.md). "
     "Wraps Yahoo Finance (curl_cffi impersonation), PostgreSQL cache, "

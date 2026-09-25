@@ -52,8 +52,13 @@ def call_gemini(
     temperature: float = 0.4,
     max_output_tokens: int = 4096,
     model: str | None = None,
+    google_search: bool = False,
 ) -> tuple[str | None, str | None]:
-    """Call Gemini. Returns (content, error_message)."""
+    """Call Gemini. Returns (content, error_message).
+
+    ``google_search`` grounds the answer in live Google Search results — use it for
+    time-sensitive facts (e.g. upcoming release dates) the model can't know from training.
+    """
     if not GEMINI_API_KEY:
         return None, "GEMINI_API_KEY is not configured. Add it to your .env and restart the API."
 
@@ -74,6 +79,7 @@ def call_gemini(
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                tools=[types.Tool(google_search=types.GoogleSearch())] if google_search else None,
             ),
         )
         text = getattr(response, "text", None)

@@ -6,6 +6,7 @@ import { BrainCircuit, Loader2, RefreshCw } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SignedInAction } from "@/components/auth/signed-in-action";
 
 /**
  * On-demand Ollama summary. Generated only when requested because local LLM
@@ -23,26 +24,28 @@ export function AiSummary({ symbol }: { symbol: string }) {
           <BrainCircuit className="size-4" />
           AI Summary
         </CardTitle>
-        <Button
-          size="sm"
-          variant={mutation.data ? "ghost" : "default"}
-          disabled={mutation.isPending}
-          onClick={() => mutation.mutate()}
-        >
-          {mutation.isPending ? (
-            <>
-              <Loader2 className="size-4 animate-spin" />
-              Generating…
-            </>
-          ) : mutation.data ? (
-            <>
-              <RefreshCw className="size-4" />
-              Regenerate
-            </>
-          ) : (
-            "Generate"
-          )}
-        </Button>
+        <SignedInAction>
+          <Button
+            size="sm"
+            variant={mutation.data ? "ghost" : "default"}
+            disabled={mutation.isPending}
+            onClick={() => mutation.mutate()}
+          >
+            {mutation.isPending ? (
+              <>
+                <Loader2 className="size-4 animate-spin" />
+                Generating…
+              </>
+            ) : mutation.data ? (
+              <>
+                <RefreshCw className="size-4" />
+                Regenerate
+              </>
+            ) : (
+              "Generate"
+            )}
+          </Button>
+        </SignedInAction>
       </CardHeader>
       <CardContent>
         {mutation.isIdle && (

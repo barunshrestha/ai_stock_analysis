@@ -114,10 +114,12 @@ export function MarketContextRail() {
           </CardTitle>
         </CardHeader>
         <CardContent className="max-h-48 space-y-2 overflow-y-auto">
-          {!data.finnhub_configured ? (
+          {!data.calendar_configured ? (
             <p className="text-xs text-muted-foreground">
-              Add FINNHUB_API_KEY for US economic releases.
+              Add GEMINI_API_KEY for US economic releases.
             </p>
+          ) : data.calendar_error ? (
+            <p className="text-xs text-muted-foreground">{data.calendar_error}</p>
           ) : data.economic_events.length === 0 ? (
             <p className="text-xs text-muted-foreground">No events this week.</p>
           ) : (
