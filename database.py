@@ -180,6 +180,21 @@ class OptionsLeg(Base):
     trade = relationship('OptionsTrade', back_populates='legs')
 
 
+class CspScan(Base):
+    """Latest cash-secured put scan for one user and ticker."""
+    __tablename__ = 'csp_scans'
+    __table_args__ = (UniqueConstraint('user_id', 'ticker', name='uq_csp_scan_user_ticker'),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(64), ForeignKey('users.id', ondelete='CASCADE'), index=True)
+    ticker = Column(String(10), nullable=False)
+    scanned_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    spot = Column(Float)
+    filters_json = Column(Text, nullable=False, default='{}')
+    results_json = Column(Text, nullable=False, default='[]')
+    match_count = Column(Integer, nullable=False, default=0)
+
+
 class TickerAnalysisNote(Base):
     """User analysis notes keyed by ticker + note type (e.g. liquidity)."""
     __tablename__ = 'ticker_analysis_notes'
@@ -284,7 +299,7 @@ class DatabaseManager:
         logger.info("Portfolio migration complete")
 
     # Tables whose rows belong to a single user.
-    _USER_OWNED_TABLES = ('portfolio_buckets', 'options_trades', 'ticker_analysis_notes')
+    _USER_OWNED_TABLES = ('portfolio_buckets', 'options_trades', 'ticker_analysis_notes', 'csp_scans')
 
     def _migrate_user_ownership(self):
         """Idempotent upgrade to per-user rows; rows with NULL user_id stay invisible to every user."""
@@ -1486,6 +1501,82 @@ class DatabaseManager:
         except Exception as e:
             session.rollback()
             logger.error(f"Error saving AI cache {ticker}/{analysis_type}: {e}")
+            return None
+        finally:
+            session.close()
+
+    _CSP_SCAN_KEEP = 20
+
+    def _csp_scan_to_dict(self, row) -> dict:
+        scanned = row.scanned_at.isoformat() + 'Z' if row.scanned_at else None
+        return {
+            'ticker': row.ticker,
+            'scanned_at': scanned,
+            'spot': row.spot,
+            'match_count': row.match_count,
+            'filters': json.loads(row.filters_json or '{}'),
+            'contracts': json.loads(row.results_json or '[]'),
+        }
+
+    def list_csp_scans(self, user_id: str) -> list[dict]:
+        session = self.get_session()
+        try:
+            rows = (
+                session.query(CspScan)
+                .filter(CspScan.user_id == user_id)
+                .order_by(CspScan.scanned_at.desc(), CspScan.id.desc())
+                .limit(self._CSP_SCAN_KEEP)
+                .all()
+            )
+            return [self._csp_scan_to_dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Error listing CSP scans: {e}")
+            return []
+        finally:
+            session.close()
+
+    def upsert_csp_scan(self, user_id: str, result: dict) -> dict | None:
+        session = self.get_session()
+        try:
+            ticker = str(result.get('ticker') or '').upper().strip()
+            if not ticker:
+                return None
+            scanned_raw = str(result.get('scanned_at') or '').replace('Z', '+00:00')
+            scanned_at = datetime.fromisoformat(scanned_raw).replace(tzinfo=None) if scanned_raw else datetime.utcnow()
+            row = (
+                session.query(CspScan)
+                .filter(CspScan.user_id == user_id, CspScan.ticker == ticker)
+                .first()
+            )
+            payload = dict(
+                scanned_at=scanned_at,
+                spot=result.get('spot'),
+                filters_json=json.dumps(result.get('filters') or {}),
+                results_json=json.dumps(result.get('contracts') or []),
+                match_count=len(result.get('contracts') or []),
+            )
+            if row:
+                for key, value in payload.items():
+                    setattr(row, key, value)
+            else:
+                row = CspScan(user_id=user_id, ticker=ticker, **payload)
+                session.add(row)
+            session.flush()
+            extras = (
+                session.query(CspScan)
+                .filter(CspScan.user_id == user_id)
+                .order_by(CspScan.scanned_at.desc(), CspScan.id.desc())
+                .offset(self._CSP_SCAN_KEEP)
+                .all()
+            )
+            for extra in extras:
+                session.delete(extra)
+            session.commit()
+            session.refresh(row)
+            return self._csp_scan_to_dict(row)
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error saving CSP scan: {e}")
             return None
         finally:
             session.close()

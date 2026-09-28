@@ -2,8 +2,9 @@
 
 import { useAuth } from "@clerk/nextjs";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
-import { ThemeProvider } from "next-themes";
 import { useEffect, useRef, useState } from "react";
+
+import { ThemeProvider } from "@/components/layout/theme-provider";
 
 /** Drops all cached API data when the signed-in user changes, so one account never sees another's data. */
 function ClearCacheOnUserChange() {
@@ -39,9 +40,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       <ClearCacheOnUserChange />
-      <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-        {children}
-      </ThemeProvider>
+      <ThemeProvider>{children}</ThemeProvider>
     </QueryClientProvider>
   );
 }

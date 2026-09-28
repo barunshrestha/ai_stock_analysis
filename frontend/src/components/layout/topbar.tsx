@@ -1,13 +1,40 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ClerkLoading, Show, SignInButton, UserButton } from "@clerk/nextjs";
+import { Show, SignInButton, UserButton } from "@clerk/nextjs";
 import { TrendingUp } from "lucide-react";
 
 import { GlobalSearch } from "@/components/search/global-search";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+
+/**
+ * Same markup on the server and the first client paint.
+ * Clerk's loaded session replaces the skeleton only after hydration.
+ */
+function AccountControl() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  if (!mounted) {
+    return <Skeleton className="size-7 rounded-full" />;
+  }
+
+  return (
+    <>
+      <Show when="signed-in">
+        <UserButton />
+      </Show>
+      <Show when="signed-out">
+        <SignInButton mode="redirect">
+          <Button size="sm">Sign in</Button>
+        </SignInButton>
+      </Show>
+    </>
+  );
+}
 
 /** Persistent top bar: brand (mobile), global search, theme toggle, account menu. */
 export function Topbar() {
@@ -21,17 +48,7 @@ export function Topbar() {
         <GlobalSearch />
       </div>
       <ThemeToggle />
-      <ClerkLoading>
-        <Skeleton className="size-7 rounded-full" />
-      </ClerkLoading>
-      <Show when="signed-in">
-        <UserButton />
-      </Show>
-      <Show when="signed-out">
-        <SignInButton mode="redirect">
-          <Button size="sm">Sign in</Button>
-        </SignInButton>
-      </Show>
+      <AccountControl />
     </header>
   );
 }

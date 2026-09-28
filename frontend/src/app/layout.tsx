@@ -28,6 +28,11 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}
       >
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem("theme")||"system";var d=document.documentElement;var r=t==="system"?(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):t;if(r!=="light"&&r!=="dark")r="light";d.classList.remove("light","dark");d.classList.add(r);d.style.colorScheme=r;}catch(e){}})();`,
+          }}
+        />
         <ClerkProvider signInUrl="/sign-in" signUpUrl="/sign-up">
           <Providers>
             <AppShell>{children}</AppShell>
