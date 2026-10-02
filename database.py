@@ -195,6 +195,19 @@ class CspScan(Base):
     match_count = Column(Integer, nullable=False, default=0)
 
 
+class CspRiskProfile(Base):
+    """Named cash-secured put filter set owned by one user."""
+    __tablename__ = 'csp_risk_profiles'
+    __table_args__ = (UniqueConstraint('user_id', 'name', name='uq_csp_profile_user_name'),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(64), ForeignKey('users.id', ondelete='CASCADE'), index=True)
+    name = Column(String(40), nullable=False)
+    filters_json = Column(Text, nullable=False, default='{}')
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class TickerAnalysisNote(Base):
     """User analysis notes keyed by ticker + note type (e.g. liquidity)."""
     __tablename__ = 'ticker_analysis_notes'
@@ -299,7 +312,13 @@ class DatabaseManager:
         logger.info("Portfolio migration complete")
 
     # Tables whose rows belong to a single user.
-    _USER_OWNED_TABLES = ('portfolio_buckets', 'options_trades', 'ticker_analysis_notes', 'csp_scans')
+    _USER_OWNED_TABLES = (
+        'portfolio_buckets',
+        'options_trades',
+        'ticker_analysis_notes',
+        'csp_scans',
+        'csp_risk_profiles',
+    )
 
     def _migrate_user_ownership(self):
         """Idempotent upgrade to per-user rows; rows with NULL user_id stay invisible to every user."""
@@ -1578,6 +1597,125 @@ class DatabaseManager:
             session.rollback()
             logger.error(f"Error saving CSP scan: {e}")
             return None
+        finally:
+            session.close()
+
+    def _csp_profile_to_dict(self, row) -> dict:
+        return {
+            'id': row.id,
+            'name': row.name,
+            'filters': json.loads(row.filters_json or '{}'),
+        }
+
+    def _seed_csp_profiles(self, session, user_id: str) -> None:
+        from backend.services.csp_scan_service import PRESET_PROFILES, filters_to_dict
+
+        for name, filters in PRESET_PROFILES:
+            session.add(CspRiskProfile(
+                user_id=user_id,
+                name=name,
+                filters_json=json.dumps(filters_to_dict(filters)),
+            ))
+
+    def list_csp_profiles(self, user_id: str) -> list[dict]:
+        session = self.get_session()
+        try:
+            rows = (
+                session.query(CspRiskProfile)
+                .filter(CspRiskProfile.user_id == user_id)
+                .order_by(CspRiskProfile.id.asc())
+                .all()
+            )
+            if not rows:
+                self._seed_csp_profiles(session, user_id)
+                session.commit()
+                rows = (
+                    session.query(CspRiskProfile)
+                    .filter(CspRiskProfile.user_id == user_id)
+                    .order_by(CspRiskProfile.id.asc())
+                    .all()
+                )
+            return [self._csp_profile_to_dict(row) for row in rows]
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error listing CSP profiles: {e}")
+            return []
+        finally:
+            session.close()
+
+    def create_csp_profile(self, user_id: str, name: str, filters: dict) -> tuple[dict | None, str | None]:
+        from sqlalchemy.exc import IntegrityError
+
+        session = self.get_session()
+        try:
+            row = CspRiskProfile(user_id=user_id, name=name, filters_json=json.dumps(filters))
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return self._csp_profile_to_dict(row), None
+        except IntegrityError:
+            session.rollback()
+            return None, "duplicate"
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error creating CSP profile: {e}")
+            return None, "error"
+        finally:
+            session.close()
+
+    def update_csp_profile(
+        self,
+        user_id: str,
+        profile_id: int,
+        *,
+        name: str | None = None,
+        filters: dict | None = None,
+    ) -> tuple[dict | None, str | None]:
+        from sqlalchemy.exc import IntegrityError
+
+        session = self.get_session()
+        try:
+            row = (
+                session.query(CspRiskProfile)
+                .filter(CspRiskProfile.user_id == user_id, CspRiskProfile.id == profile_id)
+                .first()
+            )
+            if not row:
+                return None, "missing"
+            if name is not None:
+                row.name = name
+            if filters is not None:
+                row.filters_json = json.dumps(filters)
+            session.commit()
+            session.refresh(row)
+            return self._csp_profile_to_dict(row), None
+        except IntegrityError:
+            session.rollback()
+            return None, "duplicate"
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error updating CSP profile: {e}")
+            return None, "error"
+        finally:
+            session.close()
+
+    def delete_csp_profile(self, user_id: str, profile_id: int) -> bool:
+        session = self.get_session()
+        try:
+            row = (
+                session.query(CspRiskProfile)
+                .filter(CspRiskProfile.user_id == user_id, CspRiskProfile.id == profile_id)
+                .first()
+            )
+            if not row:
+                return False
+            session.delete(row)
+            session.commit()
+            return True
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error deleting CSP profile: {e}")
+            return False
         finally:
             session.close()
 

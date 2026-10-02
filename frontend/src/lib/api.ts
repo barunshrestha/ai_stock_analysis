@@ -727,9 +727,15 @@ export interface CspScanContract {
   dte: number;
   otm_pct: number;
   premium_per_contract: number;
+  capital_at_risk?: number;
   return_on_capital_pct: number;
   annualized_return_pct: number;
   breakeven: number;
+  probability_of_profit?: number;
+  liquidity_points?: number;
+  premium_points?: number;
+  pop_points?: number;
+  iv_points?: number;
   composite_score: number;
 }
 
@@ -749,6 +755,12 @@ export interface CspRecentScan {
   match_count: number;
   filters: CspScanFilters;
   contracts: CspScanContract[];
+}
+
+export interface CspRiskProfile {
+  id: number;
+  name: string;
+  filters: CspScanFilters;
 }
 
 export interface CspScreenResult {
@@ -1008,6 +1020,19 @@ export const api = {
       body: JSON.stringify(body),
     }),
   cspScans: () => request<{ scans: CspRecentScan[] }>(`/api/options/csp/scans`),
+  cspProfiles: () => request<{ profiles: CspRiskProfile[] }>(`/api/options/csp/profiles`),
+  createCspProfile: (name: string, filters: CspScanFilters) =>
+    request<CspRiskProfile>(`/api/options/csp/profiles`, {
+      method: "POST",
+      body: JSON.stringify({ name, filters }),
+    }),
+  updateCspProfile: (id: number, body: { name?: string; filters?: CspScanFilters }) =>
+    request<CspRiskProfile>(`/api/options/csp/profiles/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteCspProfile: (id: number) =>
+    request<{ ok: boolean }>(`/api/options/csp/profiles/${id}`, { method: "DELETE" }),
   getTickerNote: (ticker: string, noteKey = "liquidity") =>
     request<TickerAnalysisNote>(
       `/api/options/ticker-notes/${encodeURIComponent(ticker)}?note_key=${encodeURIComponent(noteKey)}`,

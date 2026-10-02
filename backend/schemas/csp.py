@@ -102,6 +102,18 @@ class CspScanRequest(BaseModel):
     max_dte: int = Field(default=45, ge=0)
 
 
+class CspScanFiltersIn(BaseModel):
+    min_bid: float = Field(..., ge=0)
+    min_open_interest: int = Field(..., ge=0)
+    delta_min: float = Field(..., ge=0, le=1)
+    delta_max: float = Field(..., ge=0, le=1)
+    min_iv_pct: float = Field(..., ge=0)
+    min_otm_pct: float = Field(..., ge=0)
+    min_score: float = Field(..., ge=0, le=100)
+    min_dte: int = Field(..., ge=0)
+    max_dte: int = Field(..., ge=0)
+
+
 class CspScanContract(BaseModel):
     symbol: str
     expiration: str
@@ -113,9 +125,15 @@ class CspScanContract(BaseModel):
     dte: int
     otm_pct: float
     premium_per_contract: float
+    capital_at_risk: float
     return_on_capital_pct: float
     annualized_return_pct: float
     breakeven: float
+    probability_of_profit: float
+    liquidity_points: float
+    premium_points: float
+    pop_points: float
+    iv_points: float
     composite_score: float
 
 
@@ -147,4 +165,20 @@ class CspRecentScan(BaseModel):
     match_count: int
     filters: CspScanFiltersOut
     contracts: list[CspScanContract]
+
+
+class CspProfileCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=40)
+    filters: CspScanFiltersIn
+
+
+class CspProfileUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=40)
+    filters: CspScanFiltersIn | None = None
+
+
+class CspRiskProfile(BaseModel):
+    id: int
+    name: str
+    filters: CspScanFiltersOut
 
