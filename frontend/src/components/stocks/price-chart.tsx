@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useTheme } from "next-themes";
+import { useTheme } from "@/components/layout/theme-provider";
 import {
   CandlestickSeries,
   ColorType,

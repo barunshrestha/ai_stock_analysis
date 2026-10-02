@@ -17,9 +17,10 @@ from backend.schemas.options import (
     ParseTextRequest,
     StrategyType,
 )
-from backend.schemas.csp import CspScreenRequest, TickerNoteUpsert
+from backend.schemas.csp import CspScanRequest, CspScreenRequest, TickerNoteUpsert
 from backend.services import (
     csp_analysis_service,
+    csp_scan_service,
     market_context_service,
     options_advisory_service,
     options_image_parser_service,
@@ -70,6 +71,36 @@ def upsert_ticker_note(
     if not saved:
         raise HTTPException(status_code=500, detail="Could not save note.")
     return saved
+
+
+@router.post("/csp/scan")
+def csp_scan(req: CspScanRequest, db=Depends(get_db), user: CurrentUser = Depends(get_current_user)):
+    filters = csp_scan_service.ScanFilters(
+        min_bid=req.min_bid,
+        min_open_interest=req.min_open_interest,
+        delta_min=req.delta_min,
+        delta_max=req.delta_max,
+        min_iv_pct=req.min_iv_pct,
+        min_otm_pct=req.min_otm_pct,
+        min_score=req.min_score,
+        min_dte=req.min_dte,
+        max_dte=req.max_dte,
+    )
+    try:
+        result = csp_scan_service.scan_puts(req.ticker, filters)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    saved = db.upsert_csp_scan(user.id, result)
+    if not saved:
+        raise HTTPException(status_code=500, detail="Scan finished but could not be saved.")
+    return result
+
+
+@router.get("/csp/scans")
+def list_csp_scans(db=Depends(get_db), user: CurrentUser = Depends(get_current_user)):
+    return {"scans": db.list_csp_scans(user.id)}
 
 
 @router.post("/csp/screen")
