@@ -9,7 +9,6 @@ import pytest
 
 from backend.services.csp_scan_service import (
     ScanFilters,
-    composite_score,
     contracts_from_chain,
     expirations_in_window,
     scan_puts,
@@ -69,18 +68,26 @@ class TestFilters:
         assert _kept(dte=14) == []
         assert _kept(dte=60) == []
 
-    def test_drops_score_under_minimum(self):
-        # Scrapes every floor: ~3 points of annualized return and nothing else.
-        filters = ScanFilters()
-        score = composite_score(
-            annualized_return_pct=(0.40 / 97.0) * 100 * (365 / 45),
-            iv_pct=25,
-            open_interest=500,
-            otm_pct=3.0,
+    def test_drops_when_capital_at_risk_is_not_positive(self):
+        assert _kept(bid=90.0, strike=90.0) == []
+
+    def test_drops_score_under_minimum_only_when_a_peer_scores_higher(self):
+        filters = ScanFilters(min_score=80)
+        chain = _chain(
+            _row(ask=2.2, openInterest=2000),
+            _row(ask=4.0, openInterest=600),
+        )
+        rows = contracts_from_chain(
+            chain,
+            symbol="AAPL",
+            spot=100.0,
+            expiration="2026-10-16",
+            dte=30,
             filters=filters,
         )
-        assert score < 40
-        assert _kept(bid=0.40, strike=97.0, impliedVolatility=0.25, openInterest=500, delta=0.20, dte=45) == []
+        assert len(rows) == 1
+        assert rows[0]["open_interest"] == 2000
+        assert rows[0]["composite_score"] == 100.0
 
     def test_expiration_window_keeps_only_in_range_dates(self):
         ref = date(2026, 9, 26)
@@ -111,11 +118,39 @@ class TestMath:
         assert len(rows) == 1
         row = rows[0]
         assert row["premium_per_contract"] == 200.0
-        assert row["return_on_capital_pct"] == 2.222
-        assert row["annualized_return_pct"] == 27.04
+        assert row["capital_at_risk"] == 8800.0
+        assert row["return_on_capital_pct"] == 2.273
+        assert row["annualized_return_pct"] == 27.65
         assert row["breakeven"] == 88.0
         assert row["otm_pct"] == 10.0
-        assert row["composite_score"] == 64.04
+        assert row["probability_of_profit"] == 0.8
+        assert row["composite_score"] == 100.0
+
+    def test_single_survivor_scores_100(self):
+        rows = _kept(bid=0.40, strike=97.0, impliedVolatility=0.25, openInterest=500, delta=0.25, dte=45)
+        assert len(rows) == 1
+        assert rows[0]["composite_score"] == 100.0
+
+    def test_tighter_spread_and_higher_open_interest_ranks_first(self):
+        chain = _chain(
+            _row(ask=2.2, openInterest=2000),
+            _row(ask=4.0, openInterest=600),
+        )
+        rows = sort_contracts(
+            contracts_from_chain(
+                chain,
+                symbol="AAPL",
+                spot=100.0,
+                expiration="2026-10-16",
+                dte=30,
+                filters=ScanFilters(min_score=0),
+            )
+        )
+        assert [row["open_interest"] for row in rows] == [2000, 600]
+        assert rows[0]["liquidity_points"] == 30.0
+        assert rows[1]["liquidity_points"] == 0.0
+        assert rows[0]["composite_score"] == 100.0
+        assert rows[1]["composite_score"] == 70.0
 
     def test_sorts_highest_score_first(self):
         chain = _chain(
@@ -129,7 +164,7 @@ class TestMath:
                 spot=100.0,
                 expiration="2026-10-16",
                 dte=30,
-                filters=ScanFilters(),
+                filters=ScanFilters(min_score=0),
             )
         )
         assert [r["strike"] for r in rows] == [85.0, 90.0]

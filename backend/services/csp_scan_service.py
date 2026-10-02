@@ -18,11 +18,11 @@ DISCLAIMER = (
     "Not financial advice — for journaling and education only."
 )
 
-# Annualized return, IV, open interest, and distance at which each score slice is full.
-_ANN_RETURN_FULL = 40.0
-_IV_FULL_PCT = 50.0
-_OI_FULL = 2000
-_OTM_FULL_PCT = 15.0
+# Points for each relative component. Parts are min-max scaled across the scan.
+_LIQUIDITY_POINTS = 30.0
+_PREMIUM_POINTS = 25.0
+_POP_POINTS = 25.0
+_IV_POINTS = 20.0
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,54 @@ class ScanFilters:
     min_score: float = 40.0
     min_dte: int = 21
     max_dte: int = 45
+
+
+def filters_from_dict(raw: dict) -> ScanFilters:
+    return ScanFilters(
+        min_bid=float(raw["min_bid"]),
+        min_open_interest=int(raw["min_open_interest"]),
+        delta_min=float(raw["delta_min"]),
+        delta_max=float(raw["delta_max"]),
+        min_iv_pct=float(raw["min_iv_pct"]),
+        min_otm_pct=float(raw["min_otm_pct"]),
+        min_score=float(raw["min_score"]),
+        min_dte=int(raw["min_dte"]),
+        max_dte=int(raw["max_dte"]),
+    )
+
+
+# Shipped starting profiles. Maximum days stays 45 on each.
+PRESET_PROFILES: tuple[tuple[str, ScanFilters], ...] = (
+    (
+        "Conservative",
+        ScanFilters(
+            min_bid=0.50,
+            min_open_interest=1000,
+            delta_min=0.10,
+            delta_max=0.20,
+            min_iv_pct=25,
+            min_otm_pct=5,
+            min_score=50,
+            min_dte=30,
+            max_dte=45,
+        ),
+    ),
+    ("Balanced", ScanFilters()),
+    (
+        "Aggressive",
+        ScanFilters(
+            min_bid=0.25,
+            min_open_interest=200,
+            delta_min=0.15,
+            delta_max=0.35,
+            min_iv_pct=20,
+            min_otm_pct=2,
+            min_score=30,
+            min_dte=14,
+            max_dte=45,
+        ),
+    ),
+)
 
 
 def filters_to_dict(filters: ScanFilters) -> dict:
@@ -70,27 +118,29 @@ def _require_whole(value: int | float, label: str) -> None:
         raise ValueError(f"{label} must be a whole number zero or greater.")
 
 
-def _portion(value: float, floor: float, full: float, points: float) -> float:
-    """Points for how far `value` sits between the filter floor and the full-credit level."""
-    if full <= floor:
-        return points
-    if value <= floor:
+def _minmax(values: list[float]) -> list[float]:
+    """Scale values to 0–1 across this scan. A tie, including a single survivor, is full credit."""
+    if not values:
+        return []
+    lo = min(values)
+    hi = max(values)
+    if hi <= lo:
+        return [1.0 for _ in values]
+    span = hi - lo
+    return [(value - lo) / span for value in values]
+
+
+def _tightness(bid: float, ask) -> float:
+    """Bid divided by ask. A missing or unusable ask scores zero tightness."""
+    if ask is None or (isinstance(ask, float) and pd.isna(ask)) or pd.isna(ask):
         return 0.0
-    return points * min((value - floor) / (full - floor), 1.0)
-
-
-def composite_score(
-    annualized_return_pct: float,
-    iv_pct: float,
-    open_interest: int,
-    otm_pct: float,
-    filters: ScanFilters,
-) -> float:
-    ann_pts = _ANN_RETURN_FULL * min(max(annualized_return_pct, 0.0) / _ANN_RETURN_FULL, 1.0)
-    iv_pts = _portion(iv_pct, filters.min_iv_pct, _IV_FULL_PCT, 20)
-    oi_pts = _portion(float(open_interest), float(filters.min_open_interest), _OI_FULL, 20)
-    otm_pts = _portion(otm_pct, filters.min_otm_pct, _OTM_FULL_PCT, 20)
-    return round(ann_pts + iv_pts + oi_pts + otm_pts, 2)
+    try:
+        ask_f = float(ask)
+    except (TypeError, ValueError):
+        return 0.0
+    if ask_f <= 0 or ask_f < bid:
+        return 0.0
+    return bid / ask_f
 
 
 def _iv_pct(raw) -> float | None:
@@ -121,12 +171,18 @@ def _abs_delta(row: pd.Series, spot: float, tte_years: float, iv_pct: float | No
     return abs(options_chain_service.estimate_put_delta(strike, spot, tte_years, iv))
 
 
-def contract_math(bid: float, strike: float, spot: float, dte: int) -> dict:
-    roc = (bid / strike) * 100 if strike else 0.0
-    annualized = roc * (365 / dte) if dte else 0.0
-    otm_pct = ((spot - strike) / spot) * 100 if spot else 0.0
+def contract_math(bid: float, strike: float, spot: float, dte: int) -> dict | None:
+    """Return row math, or None when capital at risk is not positive."""
+    premium = bid * 100
+    capital = (strike * 100) - premium
+    if capital <= 0 or strike <= 0 or spot <= 0 or dte <= 0:
+        return None
+    roc = (premium / capital) * 100
+    annualized = roc * (365 / dte)
+    otm_pct = ((spot - strike) / spot) * 100
     return {
-        "premium_per_contract": round(bid * 100, 2),
+        "premium_per_contract": round(premium, 2),
+        "capital_at_risk": round(capital, 2),
         "return_on_capital_pct": round(roc, 3),
         "annualized_return_pct": round(annualized, 2),
         "breakeven": round(strike - bid, 2),
@@ -153,7 +209,40 @@ def expirations_in_window(
     return selected
 
 
-def contracts_from_chain(
+def _public_contract(candidate: dict) -> dict:
+    return {key: value for key, value in candidate.items() if not key.startswith("_")}
+
+
+def apply_relative_scores(candidates: list[dict], min_score: float) -> list[dict]:
+    """Score hard-filter survivors against each other, then drop scores under the minimum."""
+    if not candidates:
+        return []
+    oi_norm = _minmax([float(row["_oi"]) for row in candidates])
+    tight_norm = _minmax([float(row["_tightness"]) for row in candidates])
+    premium_norm = _minmax([float(row["_annualized_raw"]) for row in candidates])
+    pop_norm = _minmax([float(row["_pop_raw"]) for row in candidates])
+    iv_norm = _minmax([float(row["_iv_raw"]) for row in candidates])
+
+    scored: list[dict] = []
+    for index, candidate in enumerate(candidates):
+        liquidity = 0.5 * oi_norm[index] + 0.5 * tight_norm[index]
+        parts = {
+            "liquidity_points": round(_LIQUIDITY_POINTS * liquidity, 2),
+            "premium_points": round(_PREMIUM_POINTS * premium_norm[index], 2),
+            "pop_points": round(_POP_POINTS * pop_norm[index], 2),
+            "iv_points": round(_IV_POINTS * iv_norm[index], 2),
+        }
+        score = round(sum(parts.values()), 2)
+        if score < min_score:
+            continue
+        row = _public_contract(candidate)
+        row.update(parts)
+        row["composite_score"] = score
+        scored.append(row)
+    return scored
+
+
+def candidates_from_chain(
     chain: pd.DataFrame,
     *,
     symbol: str,
@@ -162,7 +251,7 @@ def contracts_from_chain(
     dte: int,
     filters: ScanFilters,
 ) -> list[dict]:
-    """Keep puts that pass every filter. Callers sort the combined list."""
+    """Puts that pass every hard filter. Score is applied later across the whole scan."""
     if chain is None or chain.empty or spot <= 0 or dte <= 0:
         return []
     if dte < filters.min_dte or dte > filters.max_dte:
@@ -194,13 +283,10 @@ def contracts_from_chain(
             continue
 
         math = contract_math(bid, strike, spot, dte)
-        if math["_otm_raw"] < filters.min_otm_pct:
+        if math is None or math["_otm_raw"] < filters.min_otm_pct:
             continue
 
-        score = composite_score(math["_annualized_raw"], iv_pct, oi, math["_otm_raw"], filters)
-        if score < filters.min_score:
-            continue
-
+        pop = 1.0 - delta
         rows.append(
             {
                 "symbol": symbol,
@@ -213,13 +299,42 @@ def contracts_from_chain(
                 "dte": dte,
                 "otm_pct": math["otm_pct"],
                 "premium_per_contract": math["premium_per_contract"],
+                "capital_at_risk": math["capital_at_risk"],
                 "return_on_capital_pct": math["return_on_capital_pct"],
                 "annualized_return_pct": math["annualized_return_pct"],
                 "breakeven": math["breakeven"],
-                "composite_score": score,
+                "probability_of_profit": round(pop, 4),
+                "_oi": float(oi),
+                "_tightness": _tightness(bid, row.get("ask")),
+                "_annualized_raw": math["_annualized_raw"],
+                "_pop_raw": pop,
+                "_iv_raw": iv_pct,
             }
         )
     return rows
+
+
+def contracts_from_chain(
+    chain: pd.DataFrame,
+    *,
+    symbol: str,
+    spot: float,
+    expiration: str,
+    dte: int,
+    filters: ScanFilters,
+) -> list[dict]:
+    """Hard-filter one chain, then score that chain against itself."""
+    return apply_relative_scores(
+        candidates_from_chain(
+            chain,
+            symbol=symbol,
+            spot=spot,
+            expiration=expiration,
+            dte=dte,
+            filters=filters,
+        ),
+        filters.min_score,
+    )
 
 
 def sort_contracts(rows: list[dict]) -> list[dict]:
@@ -244,11 +359,11 @@ def scan_puts(symbol: str, filters: ScanFilters | None = None, *, as_of: date | 
     if not expirations:
         raise LookupError(f"No options chain for '{symbol}'")
 
-    contracts: list[dict] = []
+    candidates: list[dict] = []
     for exp_str, dte in expirations_in_window(expirations, filters, as_of):
         chain = options_chain_service.get_puts_chain(symbol, exp_str)
-        contracts.extend(
-            contracts_from_chain(
+        candidates.extend(
+            candidates_from_chain(
                 chain,
                 symbol=symbol,
                 spot=spot,
@@ -257,6 +372,7 @@ def scan_puts(symbol: str, filters: ScanFilters | None = None, *, as_of: date | 
                 filters=filters,
             )
         )
+    contracts = apply_relative_scores(candidates, filters.min_score)
 
     return {
         "ticker": symbol,
