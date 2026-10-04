@@ -63,12 +63,17 @@ export function OptionsJournalClient() {
             Track trades, pre-trade checks, and management rules.
           </p>
         </div>
-        <Button asChild>
-          <Link href="/options/new">
-            <Plus className="mr-1 size-4" />
-            New trade
-          </Link>
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" asChild>
+            <Link href="/options/scan">Scan puts</Link>
+          </Button>
+          <Button asChild>
+            <Link href="/options/new">
+              <Plus className="mr-1 size-4" />
+              New trade
+            </Link>
+          </Button>
+        </div>
       </div>
 
       <Tabs defaultValue="dashboard">

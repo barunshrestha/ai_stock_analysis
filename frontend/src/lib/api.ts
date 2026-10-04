@@ -704,6 +704,65 @@ export interface CspSuggestedContract {
   note?: string | null;
 }
 
+export interface CspScanFilters {
+  min_bid: number;
+  min_open_interest: number;
+  delta_min: number;
+  delta_max: number;
+  min_iv_pct: number;
+  min_otm_pct: number;
+  min_score: number;
+  min_dte: number;
+  max_dte: number;
+}
+
+export interface CspScanContract {
+  symbol: string;
+  expiration: string;
+  strike: number;
+  bid: number;
+  delta: number;
+  iv_pct: number;
+  open_interest: number;
+  dte: number;
+  otm_pct: number;
+  premium_per_contract: number;
+  capital_at_risk?: number;
+  return_on_capital_pct: number;
+  annualized_return_pct: number;
+  breakeven: number;
+  probability_of_profit?: number;
+  liquidity_points?: number;
+  premium_points?: number;
+  pop_points?: number;
+  iv_points?: number;
+  composite_score: number;
+}
+
+export interface CspScanResult {
+  ticker: string;
+  spot: number;
+  scanned_at: string;
+  filters: CspScanFilters;
+  contracts: CspScanContract[];
+  disclaimer: string;
+}
+
+export interface CspRecentScan {
+  ticker: string;
+  scanned_at: string;
+  spot: number;
+  match_count: number;
+  filters: CspScanFilters;
+  contracts: CspScanContract[];
+}
+
+export interface CspRiskProfile {
+  id: number;
+  name: string;
+  filters: CspScanFilters;
+}
+
 export interface CspScreenResult {
   ticker: string;
   strategy?: string;
@@ -955,6 +1014,25 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ ticker, strategy: strategy ?? "cash_secured_put" }),
     }),
+  cspScan: (body: { ticker: string } & CspScanFilters) =>
+    request<CspScanResult>(`/api/options/csp/scan`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  cspScans: () => request<{ scans: CspRecentScan[] }>(`/api/options/csp/scans`),
+  cspProfiles: () => request<{ profiles: CspRiskProfile[] }>(`/api/options/csp/profiles`),
+  createCspProfile: (name: string, filters: CspScanFilters) =>
+    request<CspRiskProfile>(`/api/options/csp/profiles`, {
+      method: "POST",
+      body: JSON.stringify({ name, filters }),
+    }),
+  updateCspProfile: (id: number, body: { name?: string; filters?: CspScanFilters }) =>
+    request<CspRiskProfile>(`/api/options/csp/profiles/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteCspProfile: (id: number) =>
+    request<{ ok: boolean }>(`/api/options/csp/profiles/${id}`, { method: "DELETE" }),
   getTickerNote: (ticker: string, noteKey = "liquidity") =>
     request<TickerAnalysisNote>(
       `/api/options/ticker-notes/${encodeURIComponent(ticker)}?note_key=${encodeURIComponent(noteKey)}`,

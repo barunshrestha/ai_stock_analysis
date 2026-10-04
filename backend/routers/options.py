@@ -17,9 +17,17 @@ from backend.schemas.options import (
     ParseTextRequest,
     StrategyType,
 )
-from backend.schemas.csp import CspScreenRequest, TickerNoteUpsert
+from backend.schemas.csp import (
+    CspProfileCreate,
+    CspProfileUpdate,
+    CspScanFiltersIn,
+    CspScanRequest,
+    CspScreenRequest,
+    TickerNoteUpsert,
+)
 from backend.services import (
     csp_analysis_service,
+    csp_scan_service,
     market_context_service,
     options_advisory_service,
     options_image_parser_service,
@@ -70,6 +78,112 @@ def upsert_ticker_note(
     if not saved:
         raise HTTPException(status_code=500, detail="Could not save note.")
     return saved
+
+
+@router.post("/csp/scan")
+def csp_scan(req: CspScanRequest, db=Depends(get_db), user: CurrentUser = Depends(get_current_user)):
+    filters = csp_scan_service.ScanFilters(
+        min_bid=req.min_bid,
+        min_open_interest=req.min_open_interest,
+        delta_min=req.delta_min,
+        delta_max=req.delta_max,
+        min_iv_pct=req.min_iv_pct,
+        min_otm_pct=req.min_otm_pct,
+        min_score=req.min_score,
+        min_dte=req.min_dte,
+        max_dte=req.max_dte,
+    )
+    try:
+        result = csp_scan_service.scan_puts(req.ticker, filters)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    saved = db.upsert_csp_scan(user.id, result)
+    if not saved:
+        raise HTTPException(status_code=500, detail="Scan finished but could not be saved.")
+    return result
+
+
+@router.get("/csp/scans")
+def list_csp_scans(db=Depends(get_db), user: CurrentUser = Depends(get_current_user)):
+    return {"scans": db.list_csp_scans(user.id)}
+
+
+def _scan_filters(raw: CspScanFiltersIn) -> csp_scan_service.ScanFilters:
+    filters = csp_scan_service.filters_from_dict(raw.model_dump())
+    csp_scan_service.validate_scan_filters(filters)
+    return filters
+
+
+def _profile_name(name: str) -> str:
+    cleaned = name.strip()
+    if not cleaned:
+        raise ValueError("Profile name is required.")
+    return cleaned
+
+
+@router.get("/csp/profiles")
+def list_csp_profiles(db=Depends(get_db), user: CurrentUser = Depends(get_current_user)):
+    return {"profiles": db.list_csp_profiles(user.id)}
+
+
+@router.post("/csp/profiles")
+def create_csp_profile(
+    body: CspProfileCreate,
+    db=Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        name = _profile_name(body.name)
+        filters = csp_scan_service.filters_to_dict(_scan_filters(body.filters))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    saved, error = db.create_csp_profile(user.id, name, filters)
+    if error == "duplicate":
+        raise HTTPException(status_code=409, detail="A profile with that name already exists.")
+    if not saved:
+        raise HTTPException(status_code=500, detail="Could not save profile.")
+    return saved
+
+
+@router.patch("/csp/profiles/{profile_id}")
+def update_csp_profile(
+    profile_id: int,
+    body: CspProfileUpdate,
+    db=Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    if body.name is None and body.filters is None:
+        raise HTTPException(status_code=422, detail="Nothing to update.")
+    try:
+        name = _profile_name(body.name) if body.name is not None else None
+        filters = (
+            csp_scan_service.filters_to_dict(_scan_filters(body.filters))
+            if body.filters is not None
+            else None
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    saved, error = db.update_csp_profile(user.id, profile_id, name=name, filters=filters)
+    if error == "missing":
+        raise HTTPException(status_code=404, detail="Profile not found.")
+    if error == "duplicate":
+        raise HTTPException(status_code=409, detail="A profile with that name already exists.")
+    if not saved:
+        raise HTTPException(status_code=500, detail="Could not update profile.")
+    return saved
+
+
+@router.delete("/csp/profiles/{profile_id}")
+def delete_csp_profile(
+    profile_id: int,
+    db=Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    if not db.delete_csp_profile(user.id, profile_id):
+        raise HTTPException(status_code=404, detail="Profile not found.")
+    return {"ok": True}
 
 
 @router.post("/csp/screen")
