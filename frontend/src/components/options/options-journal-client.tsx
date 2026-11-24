@@ -67,6 +67,9 @@ export function OptionsJournalClient() {
           <Button variant="outline" asChild>
             <Link href="/options/scan">Scan puts</Link>
           </Button>
+          <Button variant="outline" asChild>
+            <Link href="/options/calls">Scan calls</Link>
+          </Button>
           <Button asChild>
             <Link href="/options/new">
               <Plus className="mr-1 size-4" />

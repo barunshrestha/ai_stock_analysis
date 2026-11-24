@@ -763,6 +763,75 @@ export interface CspRiskProfile {
   filters: CspScanFilters;
 }
 
+export type CcScanMode = "classic" | "pre_earnings";
+
+export interface CcScanFilters {
+  min_annualized_return_pct: number;
+  delta_min: number;
+  delta_max: number;
+  min_otm_pct: number;
+  max_otm_pct: number;
+  min_dte: number;
+  max_dte: number;
+  min_iv_pct: number;
+  min_open_interest: number;
+  min_downside_protection_pct: number;
+  min_score: number;
+}
+
+export interface CcScanContract {
+  symbol: string;
+  expiration: string;
+  strike: number;
+  bid: number;
+  delta: number;
+  iv_pct: number;
+  open_interest: number;
+  dte: number;
+  otm_pct: number;
+  premium_per_contract: number;
+  downside_protection_pct: number;
+  max_profit_if_called: number;
+  return_on_capital_pct: number;
+  annualized_return_pct: number;
+  breakeven: number;
+  earnings_date: string | null;
+  probability_of_keeping_premium: number;
+  liquidity_points: number;
+  return_points: number;
+  keep_points: number;
+  iv_points: number;
+  composite_score: number;
+}
+
+export interface CcScanResult {
+  ticker: string;
+  spot: number;
+  scanned_at: string;
+  mode: CcScanMode;
+  earnings_date: string | null;
+  filters: CcScanFilters;
+  contracts: CcScanContract[];
+  disclaimer: string;
+}
+
+export interface CcRecentScan {
+  ticker: string;
+  scanned_at: string;
+  spot: number;
+  mode: CcScanMode;
+  earnings_date: string | null;
+  match_count: number;
+  filters: CcScanFilters;
+  contracts: CcScanContract[];
+}
+
+export interface CcRiskProfile {
+  id: number;
+  name: string;
+  filters: CcScanFilters;
+}
+
 export interface CspScreenResult {
   ticker: string;
   strategy?: string;
@@ -1033,6 +1102,25 @@ export const api = {
     }),
   deleteCspProfile: (id: number) =>
     request<{ ok: boolean }>(`/api/options/csp/profiles/${id}`, { method: "DELETE" }),
+  ccScan: (body: { ticker: string; mode: CcScanMode; filters: CcScanFilters }) =>
+    request<CcScanResult>(`/api/options/cc/scan`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  ccScans: () => request<{ scans: CcRecentScan[] }>(`/api/options/cc/scans`),
+  ccProfiles: () => request<{ profiles: CcRiskProfile[] }>(`/api/options/cc/profiles`),
+  createCcProfile: (name: string, filters: CcScanFilters) =>
+    request<CcRiskProfile>(`/api/options/cc/profiles`, {
+      method: "POST",
+      body: JSON.stringify({ name, filters }),
+    }),
+  updateCcProfile: (id: number, body: { name?: string; filters?: CcScanFilters }) =>
+    request<CcRiskProfile>(`/api/options/cc/profiles/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteCcProfile: (id: number) =>
+    request<{ ok: boolean }>(`/api/options/cc/profiles/${id}`, { method: "DELETE" }),
   getTickerNote: (ticker: string, noteKey = "liquidity") =>
     request<TickerAnalysisNote>(
       `/api/options/ticker-notes/${encodeURIComponent(ticker)}?note_key=${encodeURIComponent(noteKey)}`,
