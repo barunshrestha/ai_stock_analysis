@@ -17,6 +17,7 @@ from backend.schemas.options import (
     ParseTextRequest,
     StrategyType,
 )
+from backend.schemas.cc import CcProfileCreate, CcProfileUpdate, CcScanFiltersIn, CcScanRequest
 from backend.schemas.csp import (
     CspProfileCreate,
     CspProfileUpdate,
@@ -26,6 +27,7 @@ from backend.schemas.csp import (
     TickerNoteUpsert,
 )
 from backend.services import (
+    cc_scan_service,
     csp_analysis_service,
     csp_scan_service,
     market_context_service,
@@ -182,6 +184,99 @@ def delete_csp_profile(
     user: CurrentUser = Depends(get_current_user),
 ):
     if not db.delete_csp_profile(user.id, profile_id):
+        raise HTTPException(status_code=404, detail="Profile not found.")
+    return {"ok": True}
+
+
+def _cc_filters(raw: CcScanFiltersIn) -> cc_scan_service.ScanFilters:
+    filters = cc_scan_service.filters_from_dict(raw.model_dump())
+    cc_scan_service.validate_scan_filters(filters)
+    return filters
+
+
+@router.post("/cc/scan")
+def cc_scan(
+    req: CcScanRequest,
+    db=Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        filters = _cc_filters(req.filters)
+        result = cc_scan_service.scan_calls(req.ticker, filters, req.mode)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    saved = db.upsert_cc_scan(user.id, result)
+    if not saved:
+        raise HTTPException(status_code=500, detail="Scan finished but could not be saved.")
+    return result
+
+
+@router.get("/cc/scans")
+def list_cc_scans(db=Depends(get_db), user: CurrentUser = Depends(get_current_user)):
+    return {"scans": db.list_cc_scans(user.id)}
+
+
+@router.get("/cc/profiles")
+def list_cc_profiles(db=Depends(get_db), user: CurrentUser = Depends(get_current_user)):
+    return {"profiles": db.list_cc_profiles(user.id)}
+
+
+@router.post("/cc/profiles")
+def create_cc_profile(
+    body: CcProfileCreate,
+    db=Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        name = _profile_name(body.name)
+        filters = cc_scan_service.filters_to_dict(_cc_filters(body.filters))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    saved, error = db.create_cc_profile(user.id, name, filters)
+    if error == "duplicate":
+        raise HTTPException(status_code=409, detail="A profile with that name already exists.")
+    if not saved:
+        raise HTTPException(status_code=500, detail="Could not save profile.")
+    return saved
+
+
+@router.patch("/cc/profiles/{profile_id}")
+def update_cc_profile(
+    profile_id: int,
+    body: CcProfileUpdate,
+    db=Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    if body.name is None and body.filters is None:
+        raise HTTPException(status_code=422, detail="Nothing to update.")
+    try:
+        name = _profile_name(body.name) if body.name is not None else None
+        filters = (
+            cc_scan_service.filters_to_dict(_cc_filters(body.filters))
+            if body.filters is not None
+            else None
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    saved, error = db.update_cc_profile(user.id, profile_id, name=name, filters=filters)
+    if error == "missing":
+        raise HTTPException(status_code=404, detail="Profile not found.")
+    if error == "duplicate":
+        raise HTTPException(status_code=409, detail="A profile with that name already exists.")
+    if not saved:
+        raise HTTPException(status_code=500, detail="Could not update profile.")
+    return saved
+
+
+@router.delete("/cc/profiles/{profile_id}")
+def delete_cc_profile(
+    profile_id: int,
+    db=Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    if not db.delete_cc_profile(user.id, profile_id):
         raise HTTPException(status_code=404, detail="Profile not found.")
     return {"ok": True}
 

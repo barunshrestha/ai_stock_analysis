@@ -195,10 +195,40 @@ class CspScan(Base):
     match_count = Column(Integer, nullable=False, default=0)
 
 
+class CcScan(Base):
+    """Latest covered-call scan for one user and ticker."""
+    __tablename__ = 'cc_scans'
+    __table_args__ = (UniqueConstraint('user_id', 'ticker', name='uq_cc_scan_user_ticker'),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(64), ForeignKey('users.id', ondelete='CASCADE'), index=True)
+    ticker = Column(String(10), nullable=False)
+    mode = Column(String(20), nullable=False, default='classic')
+    earnings_date = Column(String(10))
+    scanned_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    spot = Column(Float)
+    filters_json = Column(Text, nullable=False, default='{}')
+    results_json = Column(Text, nullable=False, default='[]')
+    match_count = Column(Integer, nullable=False, default=0)
+
+
 class CspRiskProfile(Base):
     """Named cash-secured put filter set owned by one user."""
     __tablename__ = 'csp_risk_profiles'
     __table_args__ = (UniqueConstraint('user_id', 'name', name='uq_csp_profile_user_name'),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(64), ForeignKey('users.id', ondelete='CASCADE'), index=True)
+    name = Column(String(40), nullable=False)
+    filters_json = Column(Text, nullable=False, default='{}')
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CcRiskProfile(Base):
+    """Named covered-call filter set owned by one user."""
+    __tablename__ = 'cc_risk_profiles'
+    __table_args__ = (UniqueConstraint('user_id', 'name', name='uq_cc_profile_user_name'),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(String(64), ForeignKey('users.id', ondelete='CASCADE'), index=True)
@@ -318,6 +348,8 @@ class DatabaseManager:
         'ticker_analysis_notes',
         'csp_scans',
         'csp_risk_profiles',
+        'cc_scans',
+        'cc_risk_profiles',
     )
 
     def _migrate_user_ownership(self):
@@ -1600,6 +1632,86 @@ class DatabaseManager:
         finally:
             session.close()
 
+    _CC_SCAN_KEEP = 20
+
+    def _cc_scan_to_dict(self, row) -> dict:
+        scanned = row.scanned_at.isoformat() + 'Z' if row.scanned_at else None
+        return {
+            'ticker': row.ticker,
+            'scanned_at': scanned,
+            'spot': row.spot,
+            'mode': row.mode or 'classic',
+            'earnings_date': row.earnings_date,
+            'match_count': row.match_count,
+            'filters': json.loads(row.filters_json or '{}'),
+            'contracts': json.loads(row.results_json or '[]'),
+        }
+
+    def list_cc_scans(self, user_id: str) -> list[dict]:
+        session = self.get_session()
+        try:
+            rows = (
+                session.query(CcScan)
+                .filter(CcScan.user_id == user_id)
+                .order_by(CcScan.scanned_at.desc(), CcScan.id.desc())
+                .limit(self._CC_SCAN_KEEP)
+                .all()
+            )
+            return [self._cc_scan_to_dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Error listing covered-call scans: {e}")
+            return []
+        finally:
+            session.close()
+
+    def upsert_cc_scan(self, user_id: str, result: dict) -> dict | None:
+        session = self.get_session()
+        try:
+            ticker = str(result.get('ticker') or '').upper().strip()
+            if not ticker:
+                return None
+            scanned_raw = str(result.get('scanned_at') or '').replace('Z', '+00:00')
+            scanned_at = datetime.fromisoformat(scanned_raw).replace(tzinfo=None) if scanned_raw else datetime.utcnow()
+            row = (
+                session.query(CcScan)
+                .filter(CcScan.user_id == user_id, CcScan.ticker == ticker)
+                .first()
+            )
+            payload = dict(
+                mode=result.get('mode') or 'classic',
+                earnings_date=result.get('earnings_date'),
+                scanned_at=scanned_at,
+                spot=result.get('spot'),
+                filters_json=json.dumps(result.get('filters') or {}),
+                results_json=json.dumps(result.get('contracts') or []),
+                match_count=len(result.get('contracts') or []),
+            )
+            if row:
+                for key, value in payload.items():
+                    setattr(row, key, value)
+            else:
+                row = CcScan(user_id=user_id, ticker=ticker, **payload)
+                session.add(row)
+            session.flush()
+            extras = (
+                session.query(CcScan)
+                .filter(CcScan.user_id == user_id)
+                .order_by(CcScan.scanned_at.desc(), CcScan.id.desc())
+                .offset(self._CC_SCAN_KEEP)
+                .all()
+            )
+            for extra in extras:
+                session.delete(extra)
+            session.commit()
+            session.refresh(row)
+            return self._cc_scan_to_dict(row)
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error saving covered-call scan: {e}")
+            return None
+        finally:
+            session.close()
+
     def _csp_profile_to_dict(self, row) -> dict:
         return {
             'id': row.id,
@@ -1715,6 +1827,125 @@ class DatabaseManager:
         except Exception as e:
             session.rollback()
             logger.error(f"Error deleting CSP profile: {e}")
+            return False
+        finally:
+            session.close()
+
+    def _cc_profile_to_dict(self, row) -> dict:
+        return {
+            'id': row.id,
+            'name': row.name,
+            'filters': json.loads(row.filters_json or '{}'),
+        }
+
+    def _seed_cc_profiles(self, session, user_id: str) -> None:
+        from backend.services.cc_scan_service import PRESET_PROFILES, filters_to_dict
+
+        for name, filters in PRESET_PROFILES:
+            session.add(CcRiskProfile(
+                user_id=user_id,
+                name=name,
+                filters_json=json.dumps(filters_to_dict(filters)),
+            ))
+
+    def list_cc_profiles(self, user_id: str) -> list[dict]:
+        session = self.get_session()
+        try:
+            rows = (
+                session.query(CcRiskProfile)
+                .filter(CcRiskProfile.user_id == user_id)
+                .order_by(CcRiskProfile.id.asc())
+                .all()
+            )
+            if not rows:
+                self._seed_cc_profiles(session, user_id)
+                session.commit()
+                rows = (
+                    session.query(CcRiskProfile)
+                    .filter(CcRiskProfile.user_id == user_id)
+                    .order_by(CcRiskProfile.id.asc())
+                    .all()
+                )
+            return [self._cc_profile_to_dict(row) for row in rows]
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error listing covered-call profiles: {e}")
+            return []
+        finally:
+            session.close()
+
+    def create_cc_profile(self, user_id: str, name: str, filters: dict) -> tuple[dict | None, str | None]:
+        from sqlalchemy.exc import IntegrityError
+
+        session = self.get_session()
+        try:
+            row = CcRiskProfile(user_id=user_id, name=name, filters_json=json.dumps(filters))
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return self._cc_profile_to_dict(row), None
+        except IntegrityError:
+            session.rollback()
+            return None, "duplicate"
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error creating covered-call profile: {e}")
+            return None, "error"
+        finally:
+            session.close()
+
+    def update_cc_profile(
+        self,
+        user_id: str,
+        profile_id: int,
+        *,
+        name: str | None = None,
+        filters: dict | None = None,
+    ) -> tuple[dict | None, str | None]:
+        from sqlalchemy.exc import IntegrityError
+
+        session = self.get_session()
+        try:
+            row = (
+                session.query(CcRiskProfile)
+                .filter(CcRiskProfile.user_id == user_id, CcRiskProfile.id == profile_id)
+                .first()
+            )
+            if not row:
+                return None, "missing"
+            if name is not None:
+                row.name = name
+            if filters is not None:
+                row.filters_json = json.dumps(filters)
+            session.commit()
+            session.refresh(row)
+            return self._cc_profile_to_dict(row), None
+        except IntegrityError:
+            session.rollback()
+            return None, "duplicate"
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error updating covered-call profile: {e}")
+            return None, "error"
+        finally:
+            session.close()
+
+    def delete_cc_profile(self, user_id: str, profile_id: int) -> bool:
+        session = self.get_session()
+        try:
+            row = (
+                session.query(CcRiskProfile)
+                .filter(CcRiskProfile.user_id == user_id, CcRiskProfile.id == profile_id)
+                .first()
+            )
+            if not row:
+                return False
+            session.delete(row)
+            session.commit()
+            return True
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Error deleting covered-call profile: {e}")
             return False
         finally:
             session.close()
