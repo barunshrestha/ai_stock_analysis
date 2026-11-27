@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AdvisoryPanel } from "@/components/options/advisory-panel";
 import { CloseTradeDialog } from "@/components/options/close-trade-dialog";
+import { CcMonitorPanel } from "@/components/options/cc-monitor-panel";
 import { CspMonitorPanel } from "@/components/options/csp-monitor-panel";
 import { DeleteTradeDialog } from "@/components/options/delete-trade-dialog";
 import { STRATEGY_LABELS } from "@/components/options/constants";
@@ -93,6 +94,13 @@ export function TradeDetailClient({ id }: { id: number }) {
             onCloseAlert={(price) => setPrefillClosePrice(String(price))}
           />
         )}
+      {trade.status === "open" && trade.strategy_type === "covered_call" && (
+        <CcMonitorPanel
+          tradeId={trade.id}
+          open
+          onCloseAlert={(price) => setPrefillClosePrice(String(price))}
+        />
+      )}
     </div>
   );
 }

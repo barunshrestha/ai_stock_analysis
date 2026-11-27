@@ -300,8 +300,12 @@ def monitor_trade(trade_id: int, db=Depends(get_db), user: CurrentUser = Depends
         raise HTTPException(status_code=404, detail="Trade not found.")
     if trade["status"] != "open":
         raise HTTPException(status_code=422, detail="Monitoring is only for open trades.")
-    if trade["strategy_type"] not in ("cash_secured_put", "short_put"):
-        raise HTTPException(status_code=422, detail="Monitoring supports CSP / short put trades only.")
+    strategy = trade["strategy_type"]
+    if strategy not in ("cash_secured_put", "short_put", "covered_call"):
+        raise HTTPException(
+            status_code=422,
+            detail="Monitoring supports cash-secured puts, short puts, and covered calls.",
+        )
 
     from datetime import date as date_cls
 
@@ -310,12 +314,20 @@ def monitor_trade(trade_id: int, db=Depends(get_db), user: CurrentUser = Depends
         raise HTTPException(status_code=422, detail="Trade has no strike on file.")
     exp = date_cls.fromisoformat(trade["expiration_date"])
     try:
-        result = csp_analysis_service.monitor_active_csp(
-            trade["ticker"],
-            float(strike),
-            exp,
-            float(trade["net_credit_debit"]),
-        )
+        if strategy == "covered_call":
+            result = csp_analysis_service.monitor_active_covered_call(
+                trade["ticker"],
+                float(strike),
+                exp,
+                float(trade["net_credit_debit"]),
+            )
+        else:
+            result = csp_analysis_service.monitor_active_csp(
+                trade["ticker"],
+                float(strike),
+                exp,
+                float(trade["net_credit_debit"]),
+            )
         return result.model_dump()
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -323,24 +335,29 @@ def monitor_trade(trade_id: int, db=Depends(get_db), user: CurrentUser = Depends
 
 @router.get("/monitoring/summary")
 def monitoring_summary(db=Depends(get_db), user: CurrentUser = Depends(get_current_user)):
-    """Alert badges for open CSP trades in the journal."""
+    """Alert badges for open short-premium trades in the journal."""
     trades = db.list_options_trades(user.id, status="open")
     alerts = []
     from datetime import date as date_cls
 
     for t in trades:
-        if t["strategy_type"] not in ("cash_secured_put", "short_put"):
+        strategy = t["strategy_type"]
+        if strategy not in ("cash_secured_put", "short_put", "covered_call"):
             continue
         strike = t["legs"][0]["strike"] if t.get("legs") else None
         if not strike:
             continue
         try:
-            mon = csp_analysis_service.monitor_active_csp(
-                t["ticker"],
-                float(strike),
-                date_cls.fromisoformat(t["expiration_date"]),
-                float(t["net_credit_debit"]),
-            )
+            exp = date_cls.fromisoformat(t["expiration_date"])
+            credit = float(t["net_credit_debit"])
+            if strategy == "covered_call":
+                mon = csp_analysis_service.monitor_active_covered_call(
+                    t["ticker"], float(strike), exp, credit
+                )
+            else:
+                mon = csp_analysis_service.monitor_active_csp(
+                    t["ticker"], float(strike), exp, credit
+                )
             if mon.trigger_close_alert or mon.breached:
                 alerts.append(
                     {

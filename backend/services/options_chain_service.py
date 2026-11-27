@@ -304,14 +304,14 @@ def get_upcoming_events(symbol: str, horizon_days: int = 45) -> dict:
     }
 
 
-def find_put_at_strike(symbol: str, expiration: str, strike: float) -> dict | None:
+def _find_contract_at_strike(symbol: str, expiration: str, strike: float, option_type: str) -> dict | None:
     exp_key = expiration
     for e in get_expirations(symbol):
         parsed = _parse_expiration(e)
         if parsed and parsed.isoformat() == expiration[:10]:
             exp_key = e
             break
-    chain = get_puts_chain(symbol, exp_key)
+    chain = get_calls_chain(symbol, exp_key) if option_type == "call" else get_puts_chain(symbol, exp_key)
     if chain.empty:
         return None
     row = chain.loc[(chain["strike"] - strike).abs().idxmin()]
@@ -327,7 +327,7 @@ def find_put_at_strike(symbol: str, expiration: str, strike: float) -> dict | No
         "premium_mid": round(mid, 2),
         "bid": round(float(row.get("bid") or 0), 2),
         "ask": round(float(row.get("ask") or 0), 2),
-        "delta": round(_row_delta(row, spot, tte), 4),
+        "delta": round(_row_delta(row, spot, tte, option_type), 4),
         "implied_volatility": float(row["impliedVolatility"]) if row.get("impliedVolatility") is not None and not pd.isna(row.get("impliedVolatility")) else None,
         "current_spot": round(spot, 2),
         "spread_pct": round(((float(row.get("ask") or 0) - float(row.get("bid") or 0)) / mid * 100), 2) if mid > 0 else None,
@@ -338,3 +338,11 @@ def find_put_at_strike(symbol: str, expiration: str, strike: float) -> dict | No
             and _safe_int(row.get("openInterest")) >= CSP_MIN_OPEN_INTEREST
         ),
     }
+
+
+def find_put_at_strike(symbol: str, expiration: str, strike: float) -> dict | None:
+    return _find_contract_at_strike(symbol, expiration, strike, "put")
+
+
+def find_call_at_strike(symbol: str, expiration: str, strike: float) -> dict | None:
+    return _find_contract_at_strike(symbol, expiration, strike, "call")

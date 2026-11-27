@@ -13,7 +13,13 @@ from backend.config import (
     TTL_OPTIONS_MONITOR,
 )
 from backend.cache import ttl_cache
-from backend.schemas.csp import CspMonitorResponse, CspScreenResponse, CspVerdict, SuggestedContract
+from backend.schemas.csp import (
+    CcMonitorResponse,
+    CspMonitorResponse,
+    CspScreenResponse,
+    CspVerdict,
+    SuggestedContract,
+)
 from backend.schemas.options import STRATEGY_META
 from backend.services import options_chain_service, stock_service
 
@@ -109,6 +115,24 @@ def compute_breached(spot: float | None, strike_price: float, breach_pct: float 
         if distance_pct <= breach_pct:
             return True
     return False
+
+
+def compute_call_breached(spot: float | None, strike_price: float, breach_pct: float = CSP_BREACH_PCT) -> bool:
+    """A covered call is near the strike when the stock rises to it or through it."""
+    if spot is None:
+        return False
+    if spot >= strike_price:
+        return True
+    if strike_price > 0:
+        distance_pct = (strike_price - spot) / strike_price * 100
+        if distance_pct <= breach_pct:
+            return True
+    return False
+
+
+def if_called_away_price(strike_price: float, initial_premium: float) -> float:
+    """Effective sale price if the shares are called: strike plus the credit per share."""
+    return round(strike_price + initial_premium, 2)
 
 
 def _strategy_label(strategy: str) -> str:
@@ -433,6 +457,89 @@ def _monitor_active_csp_cached(
         trigger_close_alert=trigger_close,
         breached=breached,
         net_cost_basis=net_basis,
+        recommendation_color=color,
+        recommendation=rec,
+        markdown="\n".join(md_lines),
+        bid=contract.get("bid") if contract else None,
+        ask=contract.get("ask") if contract else None,
+        spread_pct=contract.get("spread_pct") if contract else None,
+        open_interest=contract.get("open_interest") if contract else None,
+        liquidity_ok=contract.get("liquidity_ok") if contract else None,
+    )
+
+
+def monitor_active_covered_call(
+    ticker_symbol: str,
+    strike_price: float,
+    expiration_date: date,
+    initial_premium: float,
+) -> CcMonitorResponse:
+    return _monitor_active_covered_call_cached(
+        ticker_symbol.strip().upper(),
+        strike_price,
+        expiration_date.isoformat(),
+        initial_premium,
+    )
+
+
+@ttl_cache(TTL_OPTIONS_MONITOR)
+def _monitor_active_covered_call_cached(
+    symbol: str,
+    strike_price: float,
+    exp_str: str,
+    initial_premium: float,
+) -> CcMonitorResponse:
+    hist = stock_service.get_history(symbol, "5d")
+    spot = float(hist["Close"].iloc[-1]) if hist is not None and not hist.empty else None
+
+    contract = options_chain_service.find_call_at_strike(symbol, exp_str, strike_price)
+    current_mid = contract.get("premium_mid") if contract else None
+
+    unrealized_pct = compute_unrealized_pnl_pct(initial_premium, current_mid)
+    trigger_close = compute_trigger_close_alert(initial_premium, current_mid)
+    breached = compute_call_breached(spot, strike_price)
+    called_away = if_called_away_price(strike_price, initial_premium)
+    profitable = unrealized_pct is not None and unrealized_pct > 0
+    color: str = "green" if profitable and not breached else "red"
+
+    if trigger_close:
+        rec = "50% max profit reached — consider buying to close (professional BTC rule)."
+    elif breached:
+        rec = (
+            f"Stock testing the call strike — shares may be called away "
+            f"at an effective sale price of ${called_away:.2f}."
+        )
+    elif profitable:
+        rec = f"Position profitable ({unrealized_pct:.1f}% of max premium captured)."
+    else:
+        rec = "The call is underwater and worth watching."
+
+    md_lines = [
+        f"## Covered Call Monitor: {symbol}",
+        "",
+        f"- Strike: ${strike_price:.2f} | Exp: {exp_str}",
+        f"- Initial premium: ${initial_premium:.2f} | Current mid: ${current_mid:.2f}" if current_mid else f"- Initial premium: ${initial_premium:.2f}",
+        f"- Unrealized P&L: {unrealized_pct:.1f}%" if unrealized_pct is not None else "- Unrealized P&L: N/A",
+        f"- 50% close alert: {'YES' if trigger_close else 'No'}",
+        f"- Breach alert: {'YES' if breached else 'No'}",
+        f"- If called away: ${called_away:.2f}",
+        "",
+        f"**Recommendation:** {rec}",
+        "",
+        "*Not financial advice — for journaling and education only.*",
+    ]
+
+    return CcMonitorResponse(
+        ticker=symbol,
+        strike_price=strike_price,
+        expiration_date=exp_str,
+        initial_premium=initial_premium,
+        current_spot=round(spot, 2) if spot else None,
+        current_mid=current_mid,
+        unrealized_pnl_pct=unrealized_pct,
+        trigger_close_alert=trigger_close,
+        breached=breached,
+        if_called_away=called_away,
         recommendation_color=color,
         recommendation=rec,
         markdown="\n".join(md_lines),

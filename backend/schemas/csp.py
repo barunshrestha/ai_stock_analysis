@@ -56,6 +56,28 @@ class CspScreenResponse(BaseModel):
     disclaimer: str = "Not financial advice — for journaling and education only."
 
 
+class CcMonitorResponse(BaseModel):
+    ticker: str
+    strike_price: float
+    expiration_date: str
+    initial_premium: float
+    current_spot: float | None = None
+    current_mid: float | None = None
+    unrealized_pnl_pct: float | None = None
+    trigger_close_alert: bool = False
+    breached: bool = False
+    if_called_away: float
+    recommendation_color: Literal["green", "red"]
+    recommendation: str
+    markdown: str
+    bid: float | None = None
+    ask: float | None = None
+    spread_pct: float | None = None
+    open_interest: int | None = None
+    liquidity_ok: bool | None = None
+    disclaimer: str = "Not financial advice — for journaling and education only."
+
+
 class CspMonitorResponse(BaseModel):
     ticker: str
     strike_price: float
