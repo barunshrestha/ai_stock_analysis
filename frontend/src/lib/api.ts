@@ -851,6 +851,28 @@ export interface CspScreenResult {
   disclaimer: string;
 }
 
+export interface CcMonitorResult {
+  ticker: string;
+  strike_price: number;
+  expiration_date: string;
+  initial_premium: number;
+  current_spot: number | null;
+  current_mid: number | null;
+  unrealized_pnl_pct: number | null;
+  trigger_close_alert: boolean;
+  breached: boolean;
+  if_called_away: number;
+  recommendation_color: "green" | "red";
+  recommendation: string;
+  markdown: string;
+  bid?: number | null;
+  ask?: number | null;
+  spread_pct?: number | null;
+  open_interest?: number | null;
+  liquidity_ok?: boolean | null;
+  disclaimer: string;
+}
+
 export interface CspMonitorResult {
   ticker: string;
   strike_price: number;
@@ -1131,6 +1153,7 @@ export const api = {
       { method: "PUT", body: JSON.stringify({ content }) },
     ),
   cspMonitorTrade: (id: number) => request<CspMonitorResult>(`/api/options/trades/${id}/monitor`),
+  ccMonitorTrade: (id: number) => request<CcMonitorResult>(`/api/options/trades/${id}/monitor`),
   cspMonitoringSummary: () =>
     request<{ alerts: CspMonitoringAlert[] }>(`/api/options/monitoring/summary`),
   optionsParseText: (text: string, broker?: string) =>

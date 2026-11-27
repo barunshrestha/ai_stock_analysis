@@ -8,8 +8,10 @@ import pandas as pd
 
 from backend.services.csp_analysis_service import (
     compute_breached,
+    compute_call_breached,
     compute_trigger_close_alert,
     compute_unrealized_pnl_pct,
+    if_called_away_price,
 )
 from backend.services.options_chain_service import find_option_near_delta, find_put_near_delta
 
@@ -35,6 +37,27 @@ class TestMonitorMath:
 
     def test_no_breach_without_spot(self):
         assert compute_breached(None, 100.0) is False
+
+
+class TestCoveredCallMonitorMath:
+    def test_if_called_away_is_strike_plus_credit(self):
+        assert if_called_away_price(100.0, 2.0) == 102.0
+
+    def test_call_breach_through_the_strike(self):
+        assert compute_call_breached(103.0, 100.0) is True
+        assert compute_call_breached(100.0, 100.0) is True
+
+    def test_call_breach_inside_three_percent_below(self):
+        assert compute_call_breached(98.0, 100.0, breach_pct=3.0) is True
+        assert compute_call_breached(96.0, 100.0, breach_pct=3.0) is False
+
+    def test_no_call_breach_without_spot(self):
+        assert compute_call_breached(None, 100.0) is False
+
+    def test_fifty_percent_rule_still_applies_to_a_short_call(self):
+        assert compute_trigger_close_alert(2.0, 1.0) is True
+        assert compute_trigger_close_alert(2.0, 1.01) is False
+        assert compute_unrealized_pnl_pct(2.0, 1.0) == 50.0
 
 
 class TestDeltaPicker:
